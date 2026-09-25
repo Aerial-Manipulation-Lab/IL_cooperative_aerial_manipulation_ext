@@ -5,7 +5,7 @@
 
 """NMPC teacher plumbing for the flycrane tasks."""
 
-from .teacher import ACADOS_STATUS, FLYCRANE, RAMP_SECONDS, MpcTeacher
+from .teacher import FLYCRANE, MpcTeacher
 from .wrapper import MpcTeacherWrapper
 
-__all__ = ["ACADOS_STATUS", "FLYCRANE", "RAMP_SECONDS", "MpcTeacher", "MpcTeacherWrapper"]
+__all__ = ["FLYCRANE", "MpcTeacher", "MpcTeacherWrapper"]

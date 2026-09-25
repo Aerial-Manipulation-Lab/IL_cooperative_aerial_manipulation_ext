@@ -25,8 +25,8 @@ class MpcTeacherWrapper(gym.Wrapper):
 
     `step()` takes no action: the teacher's solve is the action. Envs whose
     solve fails are reset (a bad solve makes the rest of the episode worth-
-    less), and every done env -- failed, terminated or truncated -- gets its
-    policy re-seeded with a ramp to the command manager's fresh goal.
+    less), and every done env -- failed, terminated or truncated -- has its
+    policy handed the ramped reference the command term built during its reset.
 
     Pairs with `RecordVideo` as base -> teacher -> recorder, so the recorder
     sees the standard five-element tuples.
@@ -35,19 +35,29 @@ class MpcTeacherWrapper(gym.Wrapper):
     def __init__(self, env, **teacher_kwargs):
         super().__init__(env)
         self.teacher = MpcTeacher(env, **teacher_kwargs)
-        self.time = 0.0
         self.count = 0
+
+    @property
+    def time(self) -> float:
+        """The env's own clock: every actor timestamps off the step counter.
+
+        Not an accumulator -- the command term stamps its ramps with the same
+        expression, and the two must never disagree. `env.step` increments the
+        counter before any reset runs, so a reference sampled during a reset
+        starts exactly at the next solve's time.
+        """
+        return float(self.unwrapped.common_step_counter) * self.teacher.step_dt
 
     def reset(self, *args, **kwargs):
         ret = self.env.reset(*args, **kwargs)
-        self.time = 0.0
         self.count = 0
-        self.teacher.seed(range(self.teacher.num_envs), self.time)
+        # the command term built every env's ramp during the reset; the
+        # policies just have not been told about them yet
+        self.teacher.seed(range(self.teacher.num_envs))
         return ret
 
     def step(self, action=None):
         obs, rew, terminated, truncated, info = self.env.step(self.teacher.act(self.time))
-        self.time += self.teacher.step_dt
         self.count += 1
 
         # the env auto-resets on termination; failed solves have to be reset
@@ -61,13 +71,15 @@ class MpcTeacherWrapper(gym.Wrapper):
 
         if bool(done.any()):
             ids = torch.nonzero(done).flatten().tolist()
-            goals = self.teacher.seed(ids, self.time)
+            self.teacher.seed(ids)
             if self.teacher.verbose:
+                cmd = self.unwrapped.command_manager.get_command(MpcTeacher.COMMAND_NAME)
                 for i in ids:
                     reason = "solver failure" if i in failed else ", ".join(fired_terminations(self.env, i))
+                    goal = cmd[i, :3].cpu().numpy().round(2)
                     print(
                         f"[INFO]: env {i} episode ended at t={self.time:.2f}s "
-                        f"({reason}), new goal {goals[i].round(2)}"
+                        f"({reason}), new goal {goal}"
                     )
 
         info["mpc_pos_err"] = self.teacher.last_pos_err

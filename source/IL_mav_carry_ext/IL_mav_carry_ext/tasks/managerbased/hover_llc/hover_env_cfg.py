@@ -58,11 +58,12 @@ class CarryingSceneCfg(InteractiveSceneCfg):
 class CommandsCfg:
     """Commands for the hovering task"""
 
-    pose_command = mdp.UniformPoseCommandGlobalCfg(
+    pose_command = mdp.ApproachPoseCommandCfg(
         asset_name="robot",
         body_name="load_odometry_sensor_link",
         resampling_time_range=(20, 20),  # out of range of max episode length for now
         debug_vis=True,
+        ramp_duration=3.0,  # min-jerk ramp: never more than a gentle move away
         ranges=mdp.UniformPoseCommandGlobalCfg.Ranges(
             pos_x=(-1.0, 1.0),
             pos_y=(-1.0, 1.0),

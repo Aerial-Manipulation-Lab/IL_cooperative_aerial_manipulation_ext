@@ -60,7 +60,8 @@ def main():
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # the NMPC teacher is the policy; reset() also seeds each env's ramped goal
-    env = MpcTeacherWrapper(env, rebuild=args_cli.rebuild)
+    teacher_env = MpcTeacherWrapper(env, rebuild=args_cli.rebuild)
+    env = teacher_env
     if args_cli.video:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         video_kwargs = {
@@ -72,7 +73,7 @@ def main():
         }
         print("[INFO] Recording videos during execution.")
         print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+        env = gym.wrappers.RecordVideo(teacher_env, **video_kwargs)
 
     print("-" * 80)
     num_envs = env.unwrapped.num_envs
@@ -81,16 +82,17 @@ def main():
     env.reset()
     while simulation_app.is_running():
         with torch.inference_mode():
-            env.step()
+            # the teacher's solve is the action; RecordVideo has no default
+            env.step(None)
 
-            if env.count % 50 == 0:
-                pos_err = env.teacher.last_pos_err
+            if teacher_env.count % 50 == 0:
+                pos_err = teacher_env.teacher.last_pos_err
                 print(
-                    f"t={env.time:6.2f}s  pos_err mean={np.mean(pos_err):5.2f} m  "
+                    f"t={teacher_env.time:6.2f}s  pos_err mean={np.mean(pos_err):5.2f} m  "
                     f"max={np.max(pos_err):5.2f} m  (across {num_envs} envs)"
                 )
 
-            if args_cli.video and env.count == args_cli.video_length:
+            if args_cli.video and teacher_env.count == args_cli.video_length:
                 break
 
     # close the simulator

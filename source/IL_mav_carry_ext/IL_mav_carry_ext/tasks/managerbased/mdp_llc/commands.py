@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
+from python_mpc_cusadi import Approach, LoadState
+
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers
@@ -614,3 +616,84 @@ class UniformTwistCommandGlobalCfg(CommandTermCfg):
 
     ranges: Ranges = MISSING
     """Ranges for the commands."""
+
+
+class ApproachPoseCommand(UniformPoseCommandGlobal):
+    """Uniform pose goals with a ramped reference for the MPC teacher.
+
+    The sampled goal is a full pose (position AND attitude); on every resample
+    -- episode start, auto-reset, or an explicit `reset(env_ids)` -- this term
+    builds the min-jerk `Approach` trajectory from the payload's then-current
+    pose to that goal, at rest at both ends. Readers of `command` see the same
+    step to the goal as the parent class; the ramp lives alongside it, fetched
+    through :meth:`get_reference` by whoever drives the robot.
+    """
+
+    cfg: ApproachPoseCommandCfg
+    """Configuration for the command generator."""
+
+    def __init__(self, cfg: ApproachPoseCommandCfg, env: ManagerBasedRLEnv):
+        # the base __init__ resamples immediately, so the buffer it fills has
+        # to exist before the super() call returns
+        self.references: list = [None] * env.scene.num_envs
+        super().__init__(cfg, env)
+        self.step_dt = env.step_dt
+
+    def __str__(self) -> str:
+        msg = super().__str__()
+        msg += f"\tRamp duration: {self.cfg.ramp_duration} s\n"
+        return msg
+
+    """
+    Accessors.
+    """
+
+    def get_reference(self, env_id: int):
+        """The ramped trajectory for one env, as the MPC wants it."""
+        return self.references[int(env_id)]
+
+    """
+    Implementation specific functions.
+    """
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        # normalize first: a slice is a legal "all" but the parent indexes
+        # with len(), and only here can it be resolved cheaply
+        ids = torch.arange(self.num_envs, device=self.device)[env_ids]
+        # sample the new goals first (parent does the uniform draw)
+        super()._resample_command(ids)
+        # one host hop: the MPC works in numpy. Isaac Lab 3.0 quaternions
+        # (buffer columns 3:7) are already XYZW, the MPC's convention, so
+        # they pass through unpermuted.
+        measured = self.robot.data.body_com_state_w.torch[ids, self.body_idx].cpu().numpy()
+        origins = self._env.scene.env_origins[ids].cpu().numpy()
+        goals = self.pose_command_w[ids].cpu().numpy()
+        # the one clock: env steps happen at common_step_counter * step_dt,
+        # both for the MPC's solve time and for the ramp's time offset
+        t0 = float(self._env.common_step_counter) * self.step_dt
+        for j, i in enumerate(ids.tolist()):
+            start = LoadState(time=t0, p=measured[j, :3] - origins[j], q=measured[j, 3:7])
+            goal = LoadState(time=t0, p=goals[j, :3], q=goals[j, 3:7])
+            self.references[i] = self._build_reference(start, goal)
+
+    def _build_reference(self, start: LoadState, goal: LoadState):
+        """The single override point: which manoeuvre connects start to goal.
+
+        Subclass and return another spec's `build()` (Hover, FigureEight, ...)
+        to change what "the reference" means for this task without touching
+        anything that reads it.
+        """
+        return Approach(
+            start=start, goal=goal, duration=self.cfg.ramp_duration, time_offset=start.time
+        ).build()
+
+
+@configclass
+class ApproachPoseCommandCfg(UniformPoseCommandGlobalCfg):
+    """Configuration for the ramped pose command generator."""
+
+    class_type: type = ApproachPoseCommand
+
+    ramp_duration: float = 3.0
+    """Length of the min-jerk ramp to each sampled goal, in s. Long enough
+    that the goal is never more than a gentle move away."""

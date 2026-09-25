@@ -9,10 +9,10 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 
-from python_mpc_cusadi import CableState, DroneCfg, LoadState, PlantCfg, TeacherPolicy, TuningCfg
+from python_mpc_cusadi import (DroneCfg, DroneState, LoadState, OCPStatus,
+                               PlantCfg, TeacherPolicy, TuningCfg)
 from python_mpc_cusadi.backends.acados_cpu import AcadosBackend
 from python_mpc_cusadi.ocp.problem import OcpProblem
-from python_mpc_cusadi.signals.specs import Approach
 
 # the flycrane as measured on the hardware, same as examples/run_figure_eight.py
 FLYCRANE = PlantCfg(
@@ -25,35 +25,23 @@ FLYCRANE = PlantCfg(
     ),
 )
 
-# Long enough that the goal is never more than a gentle move away: the command
-# ranges reach ~2.8 m from the origin, so this is well under 1 m/s.
-RAMP_SECONDS = 3.0
-
-# acados' return codes. 2 and 4 are very different problems: 2 is a solve that
-# ran out of iterations and may still be usable, 4 is one the QP could not
-# solve at all.
-ACADOS_STATUS = {
-    0: "success",
-    1: "NaN detected",
-    2: "max iterations",
-    3: "minimum step size",
-    4: "QP solver failed",
-}
-
 
 class MpcTeacher:
     """One NMPC per env, solving against the scene's robot every env step.
 
-    Owns the acados backends, the ramped references and the bookkeeping of
-    which envs' last solve failed. The env is only read from, never modified:
-    resetting done envs stays the wrapper's (or the caller's) job.
+    Owns the acados backends and the bookkeeping of which envs' last solve
+    failed; references come from the task's command term, which owns their
+    lifecycle. The env is only read from, never modified: resetting done envs
+    stays the wrapper's (or the caller's) job.
     """
 
-    def __init__(self, env, plant=FLYCRANE, tuning=None, rebuild=False, ramp_seconds=RAMP_SECONDS, verbose=True):
+    COMMAND_NAME = "pose_command"
+    """Command term the ramped references are read from."""
+
+    def __init__(self, env, plant=FLYCRANE, tuning=None, rebuild=False, verbose=True):
         base = env.unwrapped
         self.env = base
         self.plant = plant
-        self.ramp_seconds = ramp_seconds
         self.verbose = verbose
 
         tuning = tuning if tuning is not None else TuningCfg()
@@ -82,57 +70,48 @@ class MpcTeacher:
               f"drones={self.policies[0].num_drones}")
         print(f"[INFO]: solving every env step, {1.0 / self.step_dt:.0f} Hz")
 
-    def load_pose(self, i: int):
-        """Env-frame position and yaw of env i's payload, as `Approach` wants them."""
+    def measured_load_state(self, i: int, time: float) -> LoadState:
+        """Env-frame state of env i's payload.
+
+        Isaac Lab 3.0 quaternions are XYZW like the MPC's (they were WXYZ
+        before 3.0, and permuting them again reads a yawed payload as flipped
+        upside down). The angular velocity goes to the payload body frame
+        here, so everything past this point is pure MPC convention.
+        """
         row = self.robot.data.body_com_state_w.torch[i, self.load_idx].cpu().numpy().astype(float)
-        # Quaternions are XYZW here, the same convention the solve loop reads.
-        yaw = float(Rotation.from_quat(row[3:7]).as_euler("zyx")[0])
-        return row[:3] - self.env_origins[i].cpu().numpy(), yaw
+        return LoadState(
+            time=time,
+            p=row[:3] - self.env_origins[i].cpu().numpy(),
+            q=row[3:7],
+            v=row[7:10],
+            w=Rotation.from_quat(row[3:7]).as_matrix().T @ row[10:13],
+        )
 
-    def measured_cables(self, i: int):
-        """Env i's cable directions, read off the sim rather than guessed.
+    def measured_drone_states(self, i: int, time: float) -> list[DroneState]:
+        """Env i's drone states, env frame like `measured_load_state`.
 
-        `OcpProblem.encode` treats these as measured and writes them into x0,
-        which is an equality constraint. Passing nothing instead makes the
-        policy fall back to its own equilibrium -- cables vertical -- and the
-        asset hangs its ropes at ~0.5 rad, so every drone setpoint would carry
-        a standing offset.
+        `solve` only needs the positions -- the taut cables hang from the
+        measured endpoints -- but the velocities come for free out of the
+        same sim buffer, and `a` is a command, not a measurement.
         """
-        load = self.robot.data.body_com_state_w.torch[i, self.load_idx].cpu().numpy().astype(float)
-        drones = self.robot.data.body_com_state_w.torch[i, self.falcon_idx, :3].cpu().numpy().astype(float)
-        R = Rotation.from_quat(load[3:7]).as_matrix()
+        rows = self.robot.data.body_com_state_w.torch[i, self.falcon_idx].cpu().numpy().astype(float)
+        origin = self.env_origins[i].cpu().numpy()
+        return [DroneState(time=time, p=row[:3] - origin, v=row[7:10], w=row[10:13])
+                for row in rows]
 
-        states = []
-        for d, drone in enumerate(self.plant.drones):
-            s = load[:3] + R @ drone.attach_point - drones[d]
-            states.append(CableState(s=(s / np.linalg.norm(s)).reshape(3, 1), l=drone.cable_length))
-        return states
+    def seed(self, env_ids):
+        """Point each listed env's policy at its command term's current ramp.
 
-    def seed(self, env_ids, stime: float):
-        """Ramp each listed env's policy from its payload's current pose to
-        that env's freshly sampled goal. Returns the goals, keyed by env id.
+        The command term rebuilt those ramps when the envs were reset -- the
+        policy only needs to be emptied and handed the trajectory. Call after
+        the reset, never before: the old reference is what the old episode was
+        flying, and a policy without one cannot solve.
         """
-        cmd = self.env.command_manager.get_command("pose_command")
-        goals = {}
+        term = self.env.command_manager.get_term(self.COMMAND_NAME)
         for i in env_ids:
             policy = self.policies[i]
-            policy.reset()  # keeps nothing; a fresh goal follows
-            # after a reset the payload is back at its spawn pose, which is
-            # where the new ramp has to start
-            start_pos, start_yaw = self.load_pose(i)
-            goal = cmd[i][:3].cpu().numpy().astype(float)
-            policy.set_reference(
-                Approach(
-                    start=tuple(start_pos),
-                    goal=tuple(goal),
-                    start_yaw=start_yaw,
-                    goal_yaw=start_yaw,
-                    duration=self.ramp_seconds,
-                    time_offset=stime,
-                ).build()
-            )
-            goals[i] = goal
-        return goals
+            policy.reset()  # keeps nothing; the fresh reference follows
+            policy.set_reference(term.get_reference(i))
 
     def act(self, stime: float) -> torch.Tensor:
         """Solve all envs and return the waypoint action for the next step.
@@ -141,28 +120,19 @@ class MpcTeacher:
         are still emitted (the solver's last iterate) but are not trustworthy.
         """
         waypoint = torch.zeros_like(self.env.action_manager.action)
-        # payload state, env frame. Quaternions are XYZW here and in the MPC,
-        # but the angular velocity has to go to the payload body frame.
-        load_state_w = self.robot.data.body_com_state_w.torch[:, self.load_idx]
 
         pos_errs = []
         self.last_failed = []
         for i in range(self.num_envs):
-            load = load_state_w[i].cpu().numpy().astype(float)
-            quat = load[3:7]
-            state = LoadState(
-                time=stime,
-                p=load[:3] - self.env_origins[i].cpu().numpy(),
-                q=quat,
-                v=load[7:10],
-                w=Rotation.from_quat(quat).as_matrix().T @ load[10:13],
-            )
+            # everything crossing into the policy is measured, env frame
+            # (quaternions XYZW here and in the MPC, angular velocity in the
+            # payload body frame)
+            measured_load = self.measured_load_state(i, stime)
+            measured_drones = self.measured_drone_states(i, stime)
 
             policy = self.policies[i]
-            # The cables are observable in sim, so measure them rather than
-            # letting the policy assume they hang vertically.
-            drones, _ = policy.solve(stime, state, self.measured_cables(i))
-            if policy.ocp_status != 0:
+            predicted_drones, _, status = policy.solve(stime, measured_load, measured_drones)
+            if status != OCPStatus.SUCCESS:
                 # a failed QP means the setpoints below are not trustworthy.
                 # The geometry goes out with it: which status it is says
                 # little on its own, but paired with where the payload was
@@ -170,22 +140,23 @@ class MpcTeacher:
                 if self.verbose:
                     goal = policy.traj.p[-1]
                     print(
-                        f"[WARN]: env {i} status {policy.ocp_status} "
-                        f"({ACADOS_STATUS.get(policy.ocp_status, 'unknown')}) at t={stime:.2f}s, "
+                        f"[WARN]: env {i} status {status.name} at t={stime:.2f}s, "
                         f"ramp {'running' if stime < policy.traj.time[-1] else 'done'}, "
-                        f"{np.linalg.norm(state.p - goal):.2f} m to goal, "
-                        f"p={np.round(state.p, 2)}, |v|={np.linalg.norm(state.v):.2f} m/s"
+                        f"{np.linalg.norm(measured_load.p - goal):.2f} m to goal, "
+                        f"p={np.round(measured_load.p, 2)}, |v|={np.linalg.norm(measured_load.v):.2f} m/s"
                     )
                 self.last_failed.append(i)
 
-            # node 1 of the horizon is 10 ms ahead, i.e. the next environment step
-            for d in range(self.num_drones):
-                setpoint = np.concatenate([drones.p[1, d], drones.v[1, d], drones.a[1, d], np.zeros(3)])
+            # the setpoints to apply now: horizon node 1, 10 ms ahead, i.e.
+            # the next environment step
+            for d, next_setpoint in enumerate(predicted_drones.state_next):
+                setpoint = np.concatenate([next_setpoint.p, next_setpoint.v,
+                                           next_setpoint.a, np.zeros(3)])
                 waypoint[i, d * 12 : (d + 1) * 12] = torch.as_tensor(setpoint, device=self.env.device)
 
             # p[-1], not p[0]: the reference is a ramp now, so its last
             # sample is the goal and its first is where the ramp began.
-            pos_errs.append(float(np.linalg.norm(state.p - policy.traj.p[-1])))
+            pos_errs.append(float(np.linalg.norm(measured_load.p - policy.traj.p[-1])))
 
         self.last_pos_err = np.asarray(pos_errs)
         return waypoint
