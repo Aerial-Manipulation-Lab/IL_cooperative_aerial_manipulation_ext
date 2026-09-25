@@ -53,38 +53,7 @@ class GeometricController:
         self.kp_rate = torch.tensor([25.0, 25.0, 8.0], device=self.device)
         self.kp_att_xy = 150.0
         self.kp_att_z = 5.0
-
-        # TODO REMOVE
-        # self.kappa = 0.022
-        # self.beta = torch.deg2rad(torch.tensor([45], device=self.device))
-        # self.l = 0.10606601717798213
-        # self.G_1 = torch.tensor(
-        #     [
-        #         [1, 1, 1, 1],
-        #         [
-        #             self.l * torch.sin(self.beta),
-        #             -self.l * torch.sin(self.beta),
-        #             -self.l * torch.sin(self.beta),
-        #             self.l * torch.sin(self.beta),
-        #         ],
-        #         [
-        #             -self.l * torch.cos(self.beta),
-        #             -self.l * torch.cos(self.beta),
-        #             self.l * torch.cos(self.beta),
-        #             self.l * torch.cos(self.beta),
-        #         ],
-        #         [self.kappa, -self.kappa, self.kappa, -self.kappa],
-        #     ],
-        #     device=self.device,
-        # )
-        # self.G_1_inv = torch.linalg.inv(self.G_1)
-        # self.thrust_min_collective = 0.0
-        # self.thrust_max_collective = 6.25 * 4  # [N]
-        # self.inertia_mat = torch.diag(torch.tensor([0.00164, 0.00184, 0.0030], device=self.device))
-        # self.thrust_min = 0.0
-        # self.thrust_max = 6.25  # [N]
-        # self.thrust_map = torch.tensor([1.562522e-06, 0.0, 0.0], device=self.device)
-
+        
         # low pass filters
         self.filter_sampling_frequency = torch.full(
             (self.num_envs, 1), 300.0, device=self.device

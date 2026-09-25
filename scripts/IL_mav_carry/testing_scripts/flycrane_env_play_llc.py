@@ -11,7 +11,6 @@ This script demonstrates how to simulate a quadcopter.
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-import os
 import torch
 
 from isaaclab.app import AppLauncher
@@ -38,9 +37,7 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import math
-import matplotlib.pyplot as plt
 
-from IL_mav_carry_ext.plotting_tools import ManagerBasedPlotter
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
 
 from isaaclab.envs import ManagerBasedRLEnv
@@ -52,9 +49,17 @@ def main():
     # create environment config
     env_cfg = HoverEnvCfg_llc()
     env_cfg.scene.num_envs = args_cli.num_envs
+    # the action term's mode determines action_dim (geometric: 12/drone, ACCBR: 5/drone),
+    # so it has to match the waypoints written below
+    env_cfg.actions.low_level_action.control_mode = args_cli.control_mode
+    # camera: track the flycrane instead of staring at the world origin from 7.5m out.
+    # eye/lookat are relative to the asset root, so shrink eye to zoom in.
+    env_cfg.viewer.origin_type = "asset_root"
+    env_cfg.viewer.asset_name = "robot"
+    env_cfg.viewer.eye = (3.5, 3.5, 5.2)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
     # setup RL environment
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    plotter = ManagerBasedPlotter(env, command_name="pose_command", control_mode=args_cli.control_mode)
     if args_cli.video:
         video_kwargs = {
             "video_folder": "./videos",
@@ -66,9 +71,9 @@ def main():
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    robot_mass = env.scene["robot"].root_physx_view.get_masses().sum()
+    robot_mass = env.unwrapped.scene["robot"].root_physx_view.get_masses().numpy().sum()
 
-    gravity = torch.tensor(env.sim.cfg.gravity, device=env.sim.device).norm()
+    gravity = torch.tensor(env.unwrapped.sim.cfg.gravity, device=env.unwrapped.sim.device).norm()
     falcon_mass = 0.6 + 0.0042 * 4 + 0.00002
     rope_mass = 0.0033692587500000004 * 7 + 0.001 * 14
     payload_mass = 1.4 + 0.00001 + 0.006
@@ -139,13 +144,13 @@ def main():
 
     while simulation_app.is_running():
         with torch.inference_mode():
-            falcon_pos = env.scene["robot"].data.body_com_state_w.torch[:, [20, 27, 34], :3]
+            falcon_pos = env.unwrapped.scene["robot"].data.body_com_state_w.torch[:, [20, 27, 34], :3]
             # reset
             if count % 500 == 0:
                 env.reset()
                 print("-" * 80)
                 print("[INFO]: Resetting environment...")
-            waypoint = torch.zeros_like(env.action_manager.action)
+            waypoint = torch.zeros_like(env.unwrapped.action_manager.action)
             # When using geometric
             if args_cli.control_mode == "geometric":
                 waypoint[:, :3] = stretch_position[:, :3]
@@ -157,11 +162,9 @@ def main():
             # waypoint[:, 24:27] = falcon_pos[:, 2]
 
             # when using ACCBR
-            if args_cli.control_mode == "ACCRBR":
+            if args_cli.control_mode == "ACCBR":
                 waypoint[:] = ACC_BR_ref
             # step the environment
-            if env.num_envs == 1:
-                plotter.collect_data()
             obs, rew, terminated, truncated, info = env.step(waypoint)
             count += 1
 
@@ -171,15 +174,6 @@ def main():
 
     # close the simulator
     env.close()
-
-    if args_cli.num_envs == 1:
-        # if args_cli.save_plots:
-        #     # save plots
-        #     plot_path = os.path.join(log_dir, "plots", "play")
-        #     plotter.plot(save=True, save_dir=plot_path)
-        # else:
-        # show plots
-        plotter.plot(save=False)
 
 
 if __name__ == "__main__":

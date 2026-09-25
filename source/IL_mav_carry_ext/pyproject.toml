@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "IL_mav_carry_ext"
+version = "0.1.0"
+description = "Imitation learning for cooperative aerial manipulation in Isaac Lab"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+keywords = ["extension", "isaaclab", "aerial-manipulation", "imitation-learning"]
+authors = [{ name = "Aerial Manipulation Lab" }]
+maintainers = [{ name = "Aerial Manipulation Lab" }]
+classifiers = [
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3.12",
+    "Isaac Sim :: 6.0.1",
+]
+dependencies = ["psutil"]
+
+[project.urls]
+Repository = "https://github.com/Aerial-Manipulation-Lab/IL_cooperative_aerial_manipulation_ext"
+
+[tool.setuptools.packages.find]
+include = ["IL_mav_carry_ext*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.csv", "*.usd", "*.urdf", "*.dae"]
+
+[tool.setuptools]
+zip-safe = false
