@@ -86,7 +86,7 @@ class ActionsCfg:
         asset_name="robot",
         body_name="Falcon.*rotor_.*",
         debug_vis=False,
-        control_mode="ACCBR",
+        control_mode="geometric",  # what the MPC teacher outputs: p, v, a per drone
     )
 
 
@@ -116,6 +116,14 @@ class ObservationsCfg:
         payload_orientation_error = ObsTerm(
             func=mdp.payload_orientation_error, params={"command_name": "pose_command"}, noise=Gnoise(std=0.01)
         )
+
+        # imitation terms: what the MPC teacher sees, in a form a uniform
+        # per-drone student can use (appended, so the columns above keep
+        # their place). No noise on the reference: it is a command, not a
+        # measurement.
+        drone_pos_rel_payload = ObsTerm(func=mdp.payload_drone_rpos, noise=Gnoise(std=0.003))
+        drone_cable_dir = ObsTerm(func=mdp.drone_cable_dir, noise=Gnoise(std=0.01))
+        payload_ref_horizon = ObsTerm(func=mdp.payload_ref_horizon, params={"command_name": "pose_command"})
 
         # action terms
 
@@ -231,8 +239,13 @@ class TerminationsCfg:
 
     When the payload reaches a certain height, etc."""
 
-    # end when sim times out
-    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    # end when sim times out. Named `success` because Isaac Lab's recorder marks
+    # an episode successful only through a termination term of exactly that
+    # name (and overwrites any flag set by hand right before it exports). So
+    # "success" means the episode ran to its end without crashing or a failed
+    # solve; whether it also ended close to the goal is for the dataset loader
+    # to decide from the recorded states.
+    success = DoneTerm(func=mdp.time_out, time_out=True)
 
     illegal_contact = DoneTerm(
         func=mdp.illegal_contact,
@@ -293,13 +306,18 @@ class HoverEnvCfg_llc(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
-    curriculum: CurriculumCfg = CurriculumCfg()
+    # off: the goal range stays fixed, so a long recording run does not change
+    # distribution partway through. Set to CurriculumCfg() to widen it again.
+    curriculum: CurriculumCfg | None = None
 
     def __post_init__(self):
         """Post initialization."""
         # general settings
         self.decimation = 3
-        self.episode_length_s = 20.0
+        # the 3 s ramp plus the ~7 s the MPC takes to settle the swinging payload
+        # (measured with check_student_obs.py --episode_length 20: flat from ~10 s),
+        # so episodes hold the whole manoeuvre but little idle hover
+        self.episode_length_s = 10.0
         # simulation settings
         self.sim.dt = 0.0033333333333333335
         self.sim.render_interval = self.decimation

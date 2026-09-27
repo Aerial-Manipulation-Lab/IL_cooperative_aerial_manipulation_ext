@@ -1,10 +1,15 @@
+import numpy as np
 import torch
+
+from python_mpc_cusadi import TuningCfg
+from python_mpc_cusadi.ocp.horizon import Horizon
 
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import matrix_from_quat, quat_conjugate, quat_inv, quat_mul
+from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_conjugate, quat_inv, quat_mul
 
+from ....plants import FLYCRANE_SIM
 from .utils import get_drone_pdist, get_drone_rpos
 
 """
@@ -223,6 +228,72 @@ def drone_pdist_obs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
     rpos = get_drone_rpos(drone_pos_world_frame)
     pdist = torch.norm(rpos, dim=-1, keepdim=True)
     return pdist.view(env.num_envs, -1)
+
+
+def drone_cable_dir(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Unit vector from each cable's attach point on the payload to its drone, world frame.
+
+    The attach points are the MPC teacher's (`FLYCRANE_SIM`), so this is the cable
+    geometry exactly as the MPC builds it from the measured endpoints under
+    its taut-cable assumption. Shape (num_envs, 3 * num_drones), drone-major.
+    """
+    robot: Articulation = env.scene[asset_cfg.name]
+    payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
+    attach_body = torch.tensor(np.stack([d.attach_point for d in FLYCRANE_SIM.drones]),
+                               dtype=torch.float32, device=env.device)
+    num_drones = attach_body.shape[0]
+    payload_quat = payload[:, None, 3:7].expand(-1, num_drones, -1)
+    attach_world = payload[:, None, :3] + quat_apply(payload_quat, attach_body.expand(env.num_envs, -1, -1))
+    cable = robot.data.body_com_state_w.torch[:, drone_idx, :3] - attach_world
+    return torch.nn.functional.normalize(cable, dim=-1).view(env.num_envs, -1)
+
+
+# Observations of the reference the MPC tracks
+
+REF_HORIZON_OFFSETS = Horizon.for_tuning(TuningCfg()).shooting_nodes
+"""Times ahead of now at which the reference is observed: the MPC's own shooting
+nodes, so the student sees exactly the stretch of reference each solve aims at."""
+
+
+def payload_ref_horizon(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """The payload reference over the MPC's horizon, relative to the payload now.
+
+    Per shooting node: position offset from the payload (3, env frame),
+    reference velocity (3) and acceleration (3), attitude relative to the
+    payload as rot6d (6), and reference body rate (3). Shape (num_envs,
+    num_nodes * 18), node-major.
+
+    Samples come from `LoadTrajectory.window`, the same lookup the MPC's
+    reference sampler uses, at the same clock (`common_step_counter * step_dt`)
+    the teacher solves at. rot6d is taken from the rotation matrix, which is
+    the same for q and -q, so the MPC's hemisphere choice needs no mirroring.
+    """
+    term = env.command_manager.get_term(command_name)
+    now = float(env.common_step_counter) * env.step_dt
+    refs = [term.get_reference(i) for i in range(env.num_envs)]
+    if any(ref is None for ref in refs):
+        # only before the first reset, when the observation manager probes
+        # this term for its shape: no ramp has been built yet
+        return torch.zeros(env.num_envs, len(REF_HORIZON_OFFSETS) * 18, device=env.device)
+    windows = [ref.window(now, REF_HORIZON_OFFSETS) for ref in refs]
+
+    def stack(name):
+        return torch.as_tensor(np.stack([getattr(w, name) for w in windows]), dtype=torch.float32, device=env.device)
+
+    robot: Articulation = env.scene[asset_cfg.name]
+    payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
+    payload_pos_env = payload[:, :3] - env.scene.env_origins
+
+    # R_payload^T R_ref: the attitude still to go, in the payload's own frame
+    rot_rel = matrix_from_quat(payload[:, None, 3:7]).transpose(-1, -2) @ matrix_from_quat(stack("q"))
+    rot6d = rot_rel[..., :2].transpose(-1, -2).flatten(-2)  # first two columns, one after the other
+
+    ref = torch.cat(
+        [stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), rot6d, stack("w")], dim=-1
+    )
+    return ref.view(env.num_envs, -1)
 
 
 # Observations for when sampling multiple points on a trajectory

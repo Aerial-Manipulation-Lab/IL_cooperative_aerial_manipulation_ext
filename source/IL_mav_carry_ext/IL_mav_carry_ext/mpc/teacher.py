@@ -9,21 +9,12 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 
-from python_mpc_cusadi import (DroneCfg, DroneState, LoadState, OCPStatus,
-                               PlantCfg, TeacherPolicy, TuningCfg)
+from python_mpc_cusadi import (DroneState, LoadState, OCPStatus,
+                               TeacherPolicy, TuningCfg)
 from python_mpc_cusadi.backends.acados_cpu import AcadosBackend
 from python_mpc_cusadi.ocp.problem import OcpProblem
 
-# the flycrane as measured on the hardware, same as examples/run_figure_eight.py
-FLYCRANE = PlantCfg(
-    load_mass=1.45,
-    load_inertia=np.array([0.04, 0.05, 0.08]),
-    drones=(
-        DroneCfg(mass=0.6, cable_length=1.0, attach_point=np.array([0.26, 0.22, 0.06])),
-        DroneCfg(mass=0.6, cable_length=1.0, attach_point=np.array([0.26, -0.22, 0.06])),
-        DroneCfg(mass=0.6, cable_length=1.0, attach_point=np.array([-0.28, 0.0, 0.06])),
-    ),
-)
+from ..plants import FLYCRANE, FLYCRANE_SIM
 
 
 class MpcTeacher:
@@ -38,7 +29,7 @@ class MpcTeacher:
     COMMAND_NAME = "pose_command"
     """Command term the ramped references are read from."""
 
-    def __init__(self, env, plant=FLYCRANE, tuning=None, rebuild=False, verbose=True):
+    def __init__(self, env, plant=FLYCRANE_SIM, tuning=None, rebuild=False, verbose=True):
         base = env.unwrapped
         self.env = base
         self.plant = plant
@@ -63,8 +54,18 @@ class MpcTeacher:
         self.falcon_idx = self.robot.find_bodies("Falcon.*_base_link_inertia")[0]
         self.env_origins = base.scene.env_origins
 
+        self.num_nodes = self.policies[0].horizon.num_nodes
         self.last_failed = []
         self.last_pos_err = np.zeros(0)
+        self.last_horizon = torch.zeros(self.num_envs, self.num_drones, self.num_nodes, 12, device=base.device)
+        """Every drone's setpoints over the whole horizon from the last solve,
+        (num_envs, num_drones, num_nodes, 12) as p, v, a, w per node, env
+        frame. Drone-major, so drone d's slice is one uniform-policy label."""
+        self.last_load_horizon = np.zeros((self.num_envs, self.num_nodes, 3))
+        """Where the last solve expects each env's payload over the horizon,
+        (num_envs, num_nodes, 3), env frame. Diagnostic: node 1 against the
+        measured payload one step later tests the MPC's model, the last node
+        against the goal tests what the MPC is aiming for."""
 
         print(f"[INFO]: MPC N={self.policies[0].backend.N} nx={self.policies[0].backend.nx} "
               f"drones={self.policies[0].num_drones}")
@@ -116,8 +117,9 @@ class MpcTeacher:
     def act(self, stime: float) -> torch.Tensor:
         """Solve all envs and return the waypoint action for the next step.
 
-        Envs whose solve failed are listed in `last_failed`; their setpoints
-        are still emitted (the solver's last iterate) but are not trustworthy.
+        The full horizon behind that action is left in `last_horizon`. Envs
+        whose solve failed are listed in `last_failed`; their setpoints are
+        still emitted (the solver's last iterate) but are not trustworthy.
         """
         waypoint = torch.zeros_like(self.env.action_manager.action)
 
@@ -131,7 +133,8 @@ class MpcTeacher:
             measured_drones = self.measured_drone_states(i, stime)
 
             policy = self.policies[i]
-            predicted_drones, _, status = policy.solve(stime, measured_load, measured_drones)
+            predicted_drones, predicted_load, status = policy.solve(stime, measured_load, measured_drones)
+            self.last_load_horizon[i] = predicted_load.p
             if status != OCPStatus.SUCCESS:
                 # a failed QP means the setpoints below are not trustworthy.
                 # The geometry goes out with it: which status it is says
@@ -153,6 +156,12 @@ class MpcTeacher:
                 setpoint = np.concatenate([next_setpoint.p, next_setpoint.v,
                                            next_setpoint.a, np.zeros(3)])
                 waypoint[i, d * 12 : (d + 1) * 12] = torch.as_tensor(setpoint, device=self.env.device)
+
+            # the whole plan the action above is node 1 of: (nodes, drones, 12)
+            # from the solver, stored drone-major
+            plan = np.concatenate([predicted_drones.p, predicted_drones.v,
+                                   predicted_drones.a, predicted_drones.w], axis=-1)
+            self.last_horizon[i] = torch.as_tensor(plan.transpose(1, 0, 2), device=self.env.device)
 
             # p[-1], not p[0]: the reference is a ramp now, so its last
             # sample is the goal and its first is where the ramp began.
