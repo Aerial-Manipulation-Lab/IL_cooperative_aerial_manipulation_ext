@@ -44,6 +44,7 @@ class BCPolicy(nn.Module):
         Dimensions that never vary (a std near zero) are left unscaled rather
         than blown up: they carry nothing to learn from.
         """
+
         def stats(x):
             std = x.std(0)
             return x.mean(0), torch.where(std > 1e-6, std, torch.ones_like(std))
@@ -68,8 +69,16 @@ class BCPolicy(nn.Module):
 
 def save_checkpoint(path, model: BCPolicy, spec: FeatureSpec, **extra):
     """Everything needed to fly the student without the training script."""
-    torch.save({"model_cfg": model.cfg, "state_dict": model.state_dict(), "meta": spec.meta,
-                "label_frame": LABEL_FRAME, **extra}, path)
+    torch.save(
+        {
+            "model_cfg": model.cfg,
+            "state_dict": model.state_dict(),
+            "meta": spec.meta,
+            "label_frame": LABEL_FRAME,
+            **extra,
+        },
+        path,
+    )
 
 
 def load_checkpoint(path, device="cpu") -> tuple[BCPolicy, FeatureSpec, dict]:
@@ -78,8 +87,10 @@ def load_checkpoint(path, device="cpu") -> tuple[BCPolicy, FeatureSpec, dict]:
     # checkpoints from before the frame was recorded were all trained payload-relative
     frame = ckpt.get("label_frame", "payload")
     if frame != LABEL_FRAME:
-        raise ValueError(f"{path} was trained with {frame}-relative labels, this code decodes "
-                         f"{LABEL_FRAME}-relative ones; retrain it")
+        raise ValueError(
+            f"{path} was trained with {frame}-relative labels, this code decodes "
+            f"{LABEL_FRAME}-relative ones; retrain it"
+        )
     cfg = ckpt["model_cfg"]
     model = BCPolicy(cfg["input_dim"], cfg["label_dim"], tuple(cfg["hidden"])).to(device)
     model.load_state_dict(ckpt["state_dict"])

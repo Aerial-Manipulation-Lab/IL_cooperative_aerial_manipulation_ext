@@ -11,8 +11,8 @@ This script demonstrates how to simulate a quadcopter.
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-import torch
 
+import torch
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -35,11 +35,9 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
+
 import gymnasium as gym
-import math
-
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
-
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.dict import print_dict
 
@@ -71,15 +69,6 @@ def main():
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    robot_mass = env.unwrapped.scene["robot"].root_physx_view.get_masses().numpy().sum()
-
-    gravity = torch.tensor(env.unwrapped.sim.cfg.gravity, device=env.unwrapped.sim.device).norm()
-    falcon_mass = 0.6 + 0.0042 * 4 + 0.00002
-    rope_mass = 0.0033692587500000004 * 7 + 0.001 * 14
-    payload_mass = 1.4 + 0.00001 + 0.006
-    mass_left_side = 2 * falcon_mass + 2 * rope_mass + 0.5 * payload_mass
-    mass_right_side = falcon_mass + rope_mass + 0.5 * payload_mass
-
     stretch_position = torch.tensor(
         [
             [
@@ -92,23 +81,6 @@ def main():
                 -0.1367,
                 0.0,
                 1.7,
-            ]
-        ],
-        dtype=torch.float32,
-    )
-
-    straight_up_position = torch.tensor(
-        [
-            [
-                0.27,
-                0.22,
-                2.141,  # drone 1
-                0.27,
-                -0.22,
-                2.141,  # drone 2
-                -0.27,
-                0.0,
-                2.141,
             ]
         ],
         dtype=torch.float32,
@@ -144,7 +116,6 @@ def main():
 
     while simulation_app.is_running():
         with torch.inference_mode():
-            falcon_pos = env.unwrapped.scene["robot"].data.body_com_state_w.torch[:, [20, 27, 34], :3]
             # reset
             if count % 500 == 0:
                 env.reset()
@@ -165,12 +136,11 @@ def main():
             if args_cli.control_mode == "ACCBR":
                 waypoint[:] = ACC_BR_ref
             # step the environment
-            obs, rew, terminated, truncated, info = env.step(waypoint)
+            env.step(waypoint)
             count += 1
 
-            if args_cli.video:
-                if count == args_cli.video_length:
-                    break
+            if args_cli.video and count == args_cli.video_length:
+                break
 
     # close the simulator
     env.close()

@@ -12,12 +12,12 @@ from .features import LABEL_FRAME, PER_DRONE_TERMS, PLAN_DIM, SHARED_TERMS, Feat
 from .model import BCPolicy, load_checkpoint, save_checkpoint
 
 __all__ = [
-    "BCPolicy",
-    "FeatureSpec",
     "LABEL_FRAME",
     "PER_DRONE_TERMS",
     "PLAN_DIM",
     "SHARED_TERMS",
+    "BCPolicy",
+    "FeatureSpec",
     "load_checkpoint",
     "save_checkpoint",
 ]

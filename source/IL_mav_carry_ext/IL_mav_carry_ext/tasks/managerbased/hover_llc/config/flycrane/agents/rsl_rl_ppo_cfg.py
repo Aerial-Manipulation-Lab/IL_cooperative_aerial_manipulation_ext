@@ -1,4 +1,6 @@
-from isaaclab.utils.configclass import configclass  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
+from isaaclab.utils.configclass import (
+    configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
+)
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 

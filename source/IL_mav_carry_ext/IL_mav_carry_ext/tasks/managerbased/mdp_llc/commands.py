@@ -7,19 +7,24 @@
 
 from __future__ import annotations
 
-import torch
 from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
-from python_mpc_cusadi import Approach, LoadState
-
+import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import FRAME_MARKER_CFG
-from isaaclab.utils.configclass import configclass  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
-from isaaclab.utils.math import combine_frame_transforms, compute_pose_error, quat_from_euler_xyz, quat_unique
+from isaaclab.utils.configclass import (
+    configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
+)
+from isaaclab.utils.math import (
+    compute_pose_error,
+    quat_from_euler_xyz,
+    quat_unique,
+)
+from python_mpc_cusadi import Approach, LoadState
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -683,9 +688,7 @@ class ApproachPoseCommand(UniformPoseCommandGlobal):
         to change what "the reference" means for this task without touching
         anything that reads it.
         """
-        return Approach(
-            start=start, goal=goal, duration=self.cfg.ramp_duration, time_offset=start.time
-        ).build()
+        return Approach(start=start, goal=goal, duration=self.cfg.ramp_duration, time_offset=start.time).build()
 
 
 @configclass

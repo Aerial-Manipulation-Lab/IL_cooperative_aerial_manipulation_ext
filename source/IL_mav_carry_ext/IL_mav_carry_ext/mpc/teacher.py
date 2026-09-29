@@ -10,14 +10,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
-from scipy.spatial.transform import Rotation
-
-from python_mpc_cusadi import (DroneState, LoadState, OCPStatus,
-                               TeacherPolicy, TuningCfg)
+from python_mpc_cusadi import DroneState, LoadState, OCPStatus, TeacherPolicy, TuningCfg
 from python_mpc_cusadi.backends.acados_cpu import AcadosBackend
 from python_mpc_cusadi.ocp.problem import OcpProblem
+from scipy.spatial.transform import Rotation
 
-from ..plants import FLYCRANE, FLYCRANE_SIM
+from ..plants import FLYCRANE_SIM
 
 
 class MpcTeacher:
@@ -70,8 +68,10 @@ class MpcTeacher:
         measured payload one step later tests the MPC's model, the last node
         against the goal tests what the MPC is aiming for."""
 
-        print(f"[INFO]: MPC N={self.policies[0].backend.N} nx={self.policies[0].backend.nx} "
-              f"drones={self.policies[0].num_drones}")
+        print(
+            f"[INFO]: MPC N={self.policies[0].backend.N} nx={self.policies[0].backend.nx} "
+            f"drones={self.policies[0].num_drones}"
+        )
         print(f"[INFO]: solving every env step, {1.0 / self.step_dt:.0f} Hz")
 
         # One solve per env side by side: acados is called through ctypes,
@@ -119,8 +119,7 @@ class MpcTeacher:
 
     @staticmethod
     def _drone_states(rows, origin, time) -> list[DroneState]:
-        return [DroneState(time=time, p=row[:3] - origin, v=row[7:10], w=row[10:13])
-                for row in rows]
+        return [DroneState(time=time, p=row[:3] - origin, v=row[7:10], w=row[10:13]) for row in rows]
 
     def seed(self, env_ids):
         """Point each listed env's policy at its command term's current ramp.
@@ -154,9 +153,7 @@ class MpcTeacher:
             for i in range(self.num_envs)
         ]
 
-        solves = list(self._pool.map(
-            lambda i: self.policies[i].solve(stime, *measured[i]), range(self.num_envs)
-        ))
+        solves = list(self._pool.map(lambda i: self.policies[i].solve(stime, *measured[i]), range(self.num_envs)))
 
         waypoint = np.zeros(tuple(self.env.action_manager.action.shape))
         horizon = np.zeros(tuple(self.last_horizon.shape))
@@ -183,8 +180,9 @@ class MpcTeacher:
             # the whole plan, (nodes, drones, 12) from the solver, stored
             # drone-major; the setpoints to apply now are its node 1, 10 ms
             # ahead, i.e. the next environment step, with zeros after p, v, a
-            plan = np.concatenate([predicted_drones.p, predicted_drones.v,
-                                   predicted_drones.a, predicted_drones.w], axis=-1).transpose(1, 0, 2)
+            plan = np.concatenate(
+                [predicted_drones.p, predicted_drones.v, predicted_drones.a, predicted_drones.w], axis=-1
+            ).transpose(1, 0, 2)
             horizon[i] = plan
             waypoint[i] = np.concatenate([plan[:, 1, :9], np.zeros((self.num_drones, 3))], axis=-1).reshape(-1)
 

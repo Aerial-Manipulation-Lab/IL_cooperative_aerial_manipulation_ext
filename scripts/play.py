@@ -1,5 +1,4 @@
-"""Roll out a trained student next to the NMPC teacher.
-"""
+"""Roll out a trained student next to the NMPC teacher."""
 
 """Launch Isaac Sim Simulator first."""
 
@@ -10,10 +9,18 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Roll out a trained student next to the NMPC teacher.")
 parser.add_argument("--checkpoint", type=str, required=True, help="Checkpoint from scripts/train.py.")
 parser.add_argument("--num_envs", type=int, default=4, help="Flycranes flying in parallel.")
-parser.add_argument("--num_episodes", type=int, default=None,
-                    help="Stop once this many episodes have ended; default one per env, i.e. a single round.")
-parser.add_argument("--beta", type=float, default=0.0,
-                    help="Probability the teacher's action is executed per step: 0 student, 1 teacher baseline.")
+parser.add_argument(
+    "--num_episodes",
+    type=int,
+    default=None,
+    help="Stop once this many episodes have ended; default one per env, i.e. a single round.",
+)
+parser.add_argument(
+    "--beta",
+    type=float,
+    default=0.0,
+    help="Probability the teacher's action is executed per step: 0 student, 1 teacher baseline.",
+)
 parser.add_argument("--seed", type=int, default=0, help="Env seed; the same seed samples the same goals.")
 parser.add_argument("--video", action="store_true", default=False, help="Record a video of the first steps.")
 parser.add_argument("--video_length", type=int, default=600, help="Length of the recorded video (in steps).")
@@ -37,11 +44,9 @@ from datetime import datetime
 import gymnasium as gym
 import numpy as np
 import torch
-
 from IL_mav_carry_ext.imitation import load_checkpoint
 from IL_mav_carry_ext.mpc import MpcTeacherWrapper
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
-
 from isaaclab.envs import ManagerBasedRLEnv
 
 HEARTBEAT_S = 10.0
@@ -54,8 +59,10 @@ class StudentPolicy:
 
     def __init__(self, path, device):
         self.model, self.spec, ckpt = load_checkpoint(path, device=device)
-        print(f"[INFO]: student from {path} (epoch {ckpt['epoch']}, "
-              f"val node-1 pos {ckpt['metrics']['val/node1_pos_cm']:.2f} cm)")
+        print(
+            f"[INFO]: student from {path} (epoch {ckpt['epoch']}, "
+            f"val node-1 pos {ckpt['metrics']['val/node1_pos_cm']:.2f} cm)"
+        )
 
     def __call__(self, obs: torch.Tensor) -> torch.Tensor:
         label = self.model.predict(self.spec.build_inputs(obs))
@@ -150,13 +157,15 @@ def main():
             break
 
     if ended:
-        success, goal_err, label_err, _ = (np.asarray(col) for col in zip(*ended))
+        success, goal_err, label_err, _ = (np.asarray(col) for col in zip(*ended, strict=True))
         who = "student" if args_cli.beta == 0 else ("teacher" if args_cli.beta == 1 else f"beta={args_cli.beta:g}")
         print(f"\n[RESULT] {who}, {len(ended)} episodes")
         print(f"  success            {success.mean():.0%} ({int(success.sum())}/{len(ended)})")
         if success.any():
-            print(f"  final goal error   mean {goal_err[success].mean() * 100:.2f} cm, "
-                  f"max {goal_err[success].max() * 100:.2f} cm (successful episodes)")
+            print(
+                f"  final goal error   mean {goal_err[success].mean() * 100:.2f} cm, "
+                f"max {goal_err[success].max() * 100:.2f} cm (successful episodes)"
+            )
         print(f"  label error        mean {label_err.mean() * 100:.2f} cm (node-1 position vs teacher)")
         print(f"  failed solves      {failed_solves}")
 

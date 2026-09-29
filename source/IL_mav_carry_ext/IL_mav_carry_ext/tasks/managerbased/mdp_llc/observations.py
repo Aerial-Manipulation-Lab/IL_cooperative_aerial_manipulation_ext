@@ -1,16 +1,14 @@
 import numpy as np
 import torch
-
-from python_mpc_cusadi import TuningCfg
-from python_mpc_cusadi.ocp.horizon import Horizon
-
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_conjugate, quat_inv, quat_mul
+from python_mpc_cusadi import TuningCfg
+from python_mpc_cusadi.ocp.horizon import Horizon
 
 from ....plants import FLYCRANE_SIM
-from .utils import get_drone_pdist, get_drone_rpos
+from .utils import get_drone_rpos
 
 """
 Observations for the payload
@@ -239,8 +237,9 @@ def drone_cable_dir(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
     """
     robot: Articulation = env.scene[asset_cfg.name]
     payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
-    attach_body = torch.tensor(np.stack([d.attach_point for d in FLYCRANE_SIM.drones]),
-                               dtype=torch.float32, device=env.device)
+    attach_body = torch.tensor(
+        np.stack([d.attach_point for d in FLYCRANE_SIM.drones]), dtype=torch.float32, device=env.device
+    )
     num_drones = attach_body.shape[0]
     payload_quat = payload[:, None, 3:7].expand(-1, num_drones, -1)
     attach_world = payload[:, None, :3] + quat_apply(payload_quat, attach_body.expand(env.num_envs, -1, -1))
@@ -290,9 +289,7 @@ def payload_ref_horizon(
     rot_rel = matrix_from_quat(payload[:, None, 3:7]).transpose(-1, -2) @ matrix_from_quat(stack("q"))
     rot6d = rot_rel[..., :2].transpose(-1, -2).flatten(-2)  # first two columns, one after the other
 
-    ref = torch.cat(
-        [stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), rot6d, stack("w")], dim=-1
-    )
+    ref = torch.cat([stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), rot6d, stack("w")], dim=-1)
     return ref.view(env.num_envs, -1)
 
 

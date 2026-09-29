@@ -1,8 +1,8 @@
 import csv
 import functools
 import os
+
 import torch
-import zipfile
 from torch.func import vmap
 
 
@@ -66,12 +66,10 @@ def quat_axis(q: torch.Tensor, axis: int = 0):
 def import_ref_from_csv(file_path) -> torch.Tensor:
     with open(file_path) as f:
         reader = csv.reader(f, delimiter=",")
-        i = 0
         references = []
-        for row in reader:
+        for i, row in enumerate(reader):
             if i > 1:
                 references.append([float(x) for x in row])
-            i += 1
     return references
 
 

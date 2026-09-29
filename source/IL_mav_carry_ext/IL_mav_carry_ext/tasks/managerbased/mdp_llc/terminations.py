@@ -1,5 +1,5 @@
 import torch
-
+from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import euler_xyz_from_quat, quat_inv, quat_mul
@@ -69,7 +69,7 @@ def payload_angle_cos(
     """Terminate when the payload angle is too large."""
     robot = env.scene[asset_cfg.name]
     payload_quat = robot.data.body_com_state_w.torch[:, payload_idx, 3:7].squeeze(1)
-    roll, pitch, yaw = euler_xyz_from_quat(payload_quat)  # yaw can be whatever
+    roll, pitch, _yaw = euler_xyz_from_quat(payload_quat)  # yaw can be whatever
     mapped_angle = torch.stack((torch.cos(roll), torch.cos(pitch)), dim=1)
     is_angle_limit = (mapped_angle < threshold).any(dim=1)
     assert is_angle_limit.shape == (env.num_envs,)
@@ -87,7 +87,7 @@ def cable_angle_drones_cos(
     rope_orientations_drones = quat_mul(
         drone_orientation_inv, rope_orientations_world
     )  # cable angles relative to drones
-    roll, pitch, yaw = euler_xyz_from_quat(rope_orientations_drones)  # yaw can be whatever
+    roll, pitch, _yaw = euler_xyz_from_quat(rope_orientations_drones)  # yaw can be whatever
     mapped_angle = torch.stack((torch.cos(roll), torch.cos(pitch)), dim=1)
     is_cable_limit = (mapped_angle < threshold).any(dim=1).view(-1, 3).any(dim=1)
     assert is_cable_limit.shape == (env.num_envs,)
@@ -105,7 +105,7 @@ def cable_angle_payload_cos(
     rope_orientations_payload = quat_mul(
         payload_orientation_inv, rope_orientations_world
     )  # cable angles relative to payload
-    roll, pitch, yaw = euler_xyz_from_quat(rope_orientations_payload)  # yaw can be whatever
+    roll, pitch, _yaw = euler_xyz_from_quat(rope_orientations_payload)  # yaw can be whatever
     mapped_angle = torch.stack((torch.cos(roll), torch.cos(pitch)), dim=1)
     is_cable_limit = (mapped_angle < threshold).any(dim=1).view(-1, 3).any(dim=1)
     assert is_cable_limit.shape == (env.num_envs,)

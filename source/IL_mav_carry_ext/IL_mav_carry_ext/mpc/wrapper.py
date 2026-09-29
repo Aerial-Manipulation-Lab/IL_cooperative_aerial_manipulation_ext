@@ -129,10 +129,7 @@ class MpcTeacherWrapper(gym.Wrapper):
                 for i in ids:
                     reason = "solver failure" if i in reset_by_us else ", ".join(fired_terminations(self.env, i))
                     goal = cmd[i, :3].cpu().numpy().round(2)
-                    print(
-                        f"[INFO]: env {i} episode ended at t={self.time:.2f}s "
-                        f"({reason}), new goal {goal}"
-                    )
+                    print(f"[INFO]: env {i} episode ended at t={self.time:.2f}s ({reason}), new goal {goal}")
 
         info["mpc_pos_err"] = self.teacher.last_pos_err
         info["mpc_failed"] = list(failed)

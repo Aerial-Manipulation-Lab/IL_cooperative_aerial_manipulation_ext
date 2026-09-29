@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-import torch
 from typing import TYPE_CHECKING
 
-import isaaclab.sim as sim_utils
+import torch
 from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from isaaclab.utils.math import euler_xyz_from_quat, quat_apply, quat_apply_inverse, quat_error_magnitude, quat_inv, quat_mul
+from isaaclab.utils.math import (
+    euler_xyz_from_quat,
+    quat_apply,
+    quat_error_magnitude,
+    quat_inv,
+    quat_mul,
+)
 
-from .marker_utils import DRONE_POS_MARKER_CFG
 from .utils import *
 
 if TYPE_CHECKING:
@@ -318,7 +320,7 @@ def angle_cable_load(
     desired_angles = torch.tensor(
         [[-threshold, threshold], [threshold, threshold], [0, -threshold]], device=env.sim.device
     ).repeat(env.scene.num_envs, 1, 1)
-    roll, pitch, yaw = euler_xyz_from_quat(rope_orientations_payload)  # yaw can be whatever
+    roll, pitch, _yaw = euler_xyz_from_quat(rope_orientations_payload)  # yaw can be whatever
     mapped_angle = torch.stack((torch.sin(roll.view(env.num_envs, 3)), torch.sin(pitch.view(env.num_envs, 3))), dim=-1)
     angle_error = torch.norm(mapped_angle - desired_angles, dim=-1)
     reward_angle = reward_weight * torch.exp(-angle_error.sum(dim=-1) / num_drones)

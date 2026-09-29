@@ -11,7 +11,6 @@ acados backend into every env that merely observes.
 """
 
 import numpy as np
-
 from python_mpc_cusadi import DroneCfg, PlantCfg
 
 # the flycrane as measured on the hardware, same as examples/run_figure_eight.py

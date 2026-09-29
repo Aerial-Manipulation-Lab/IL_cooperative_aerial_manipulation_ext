@@ -27,12 +27,20 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Check the imitation obs terms against the NMPC teacher.")
 parser.add_argument("--num_envs", type=int, default=4, help="Number of environments to spawn.")
 parser.add_argument("--steps", type=int, default=None, help="Env steps to check (100 per second); default one episode.")
-parser.add_argument("--episode_length", type=float, default=None,
-                    help="Episode length in s, overriding the env cfg, e.g. to see whether the MPC is still converging.")
+parser.add_argument(
+    "--episode_length",
+    type=float,
+    default=None,
+    help="Episode length in s, overriding the env cfg, e.g. to see whether the MPC is still converging.",
+)
 parser.add_argument("--rebuild", action="store_true", default=False, help="Regenerate the acados solver first.")
 parser.add_argument("--seed", type=int, default=0, help="Env seed, so runs sample the same goals.")
-parser.add_argument("--plant", choices=["sim", "hw"], default="sim",
-                    help="Plant the MPC models: the sim's USD geometry, or the hardware measurements.")
+parser.add_argument(
+    "--plant",
+    choices=["sim", "hw"],
+    default="sim",
+    help="Plant the MPC models: the sim's USD geometry, or the hardware measurements.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -43,14 +51,12 @@ simulation_app = app_launcher.app
 
 import numpy as np
 import torch
-from scipy.spatial.transform import Rotation
-
 from IL_mav_carry_ext.mpc import MpcTeacherWrapper
 from IL_mav_carry_ext.plants import FLYCRANE, FLYCRANE_SIM
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
 from IL_mav_carry_ext.tasks.managerbased.mdp_llc import observations as mdp_obs
-
 from isaaclab.envs import ManagerBasedRLEnv
+from scipy.spatial.transform import Rotation
 
 ROPE_BODIES = "rope_[1-3]_link"
 """The simulated cables' payload ends, one per drone, in drone order."""
@@ -64,7 +70,7 @@ def split_terms(env, obs):
     names = manager.active_terms["policy"]
     dims = [int(np.prod(d)) for d in manager.group_obs_term_dim["policy"]]
     cols = np.split(obs["policy"].cpu().numpy(), np.cumsum(dims)[:-1], axis=1)
-    return dict(zip(names, cols))
+    return dict(zip(names, cols, strict=True))
 
 
 def expected_ref_horizon(teacher, i, now):
@@ -87,7 +93,7 @@ def main():
     if args_cli.episode_length is not None:
         env_cfg.episode_length_s = args_cli.episode_length
     # one full episode by default, so the goal error below covers ramp and settling alike
-    num_steps = args_cli.steps or int(round(env_cfg.episode_length_s / (env_cfg.sim.dt * env_cfg.decimation)))
+    num_steps = args_cli.steps or round(env_cfg.episode_length_s / (env_cfg.sim.dt * env_cfg.decimation))
     env = MpcTeacherWrapper(ManagerBasedRLEnv(cfg=env_cfg), plant=PLANT, rebuild=args_cli.rebuild, verbose=False)
     print(f"[INFO]: MPC plant: {args_cli.plant}")
     teacher = env.teacher
@@ -107,12 +113,18 @@ def main():
     # goal) separates a consistent offset (e.g. a z sag, same sign in every env)
     # from a lag, whose direction follows each env's goal. Envs reset when an
     # episode ends, so rows past the first episode mix goals.
-    steps_per_s = int(round(1.0 / teacher.step_dt))
+    steps_per_s = round(1.0 / teacher.step_dt)
     print(f"[MPC]   goal error over time, {teacher.num_envs} envs (ramp ends at 3 s)", flush=True)
-    print("[MPC]              payload - goal                                                  |  drone - setpoint  |"
-          " cable   | MPC's payload z: predicted - measured, horizon end - goal", flush=True)
-    print("[MPC]     t [s]   |err| mean   max    |  signed mean x      y      z   |  |x|    |y|    |z|  |"
-          "  |err|  signed z  | length  |  node 1      end  [cm; cable m]", flush=True)
+    print(
+        "[MPC]              payload - goal                                                  |  drone - setpoint  |"
+        " cable   | MPC's payload z: predicted - measured, horizon end - goal",
+        flush=True,
+    )
+    print(
+        "[MPC]     t [s]   |err| mean   max    |  signed mean x      y      z   |  |x|    |y|    |z|  |"
+        "  |err|  signed z  | length  |  node 1      end  [cm; cable m]",
+        flush=True,
+    )
     for step in range(num_steps):
         # the obs in hand is what the next solve acts on, at the env's clock now
         terms = split_terms(env, obs)
@@ -130,15 +142,17 @@ def main():
         cos = np.clip((cable * sim_cable).sum(-1), -1.0, 1.0)
         worst["cable_angle_deg"] = max(worst["cable_angle_deg"], float(np.degrees(np.arccos(cos)).max()))
         payload = state[:, teacher.load_idx]
-        attach = np.stack([
-            payload[:, :3] + Rotation.from_quat(payload[:, 3:7]).apply(d.attach_point) for d in PLANT.drones
-        ], axis=1)
+        attach = np.stack(
+            [payload[:, :3] + Rotation.from_quat(payload[:, 3:7]).apply(d.attach_point) for d in PLANT.drones], axis=1
+        )
         worst["attach_m"] = max(worst["attach_m"], float(np.linalg.norm(attach - rope, axis=-1).max()))
         if step % steps_per_s == 0:
-            e = 100 * np.stack([
-                teacher.measured_load_state(i, now).p - teacher.policies[i].traj.p[-1]
-                for i in range(teacher.num_envs)
-            ])
+            e = 100 * np.stack(
+                [
+                    teacher.measured_load_state(i, now).p - teacher.policies[i].traj.p[-1]
+                    for i in range(teacher.num_envs)
+                ]
+            )
         checked += 1
 
         with torch.inference_mode():
@@ -148,8 +162,11 @@ def main():
         if step % steps_per_s == 0:
             # node 1 is the setpoint for one step ahead, i.e. for right now
             sent = env.unwrapped.teacher_action.view(teacher.num_envs, -1, 12)[..., :3].cpu().numpy()
-            flown = (robot.data.body_com_state_w.torch[:, teacher.falcon_idx, :3]
-                     - teacher.env_origins[:, None]).cpu().numpy()
+            flown = (
+                (robot.data.body_com_state_w.torch[:, teacher.falcon_idx, :3] - teacher.env_origins[:, None])
+                .cpu()
+                .numpy()
+            )
             track = 100 * (flown - sent)
             after = robot.data.body_com_state_w.torch[:, teacher.load_idx].cpu().numpy()
             payload_after = after[:, :3] - teacher.env_origins.cpu().numpy()
@@ -163,10 +180,13 @@ def main():
             aim_z = 100 * (teacher.last_load_horizon[:, -1, 2] - goal_z).mean()
             norm = np.linalg.norm(e, axis=-1)
             m, a = e.mean(0), np.abs(e).mean(0)
-            print(f"[MPC]     {step * teacher.step_dt:5.1f}   {norm.mean():7.2f} {norm.max():7.2f}   | "
-                  f"{m[0]:7.2f} {m[1]:6.2f} {m[2]:6.2f}  | {a[0]:5.2f}  {a[1]:5.2f}  {a[2]:5.2f}  | "
-                  f"{np.linalg.norm(track, axis=-1).mean():6.2f}  {track[..., 2].mean():7.2f}   | "
-                  f"{cable_length:6.3f}  | {model_z:7.2f}  {aim_z:7.2f}", flush=True)
+            print(
+                f"[MPC]     {step * teacher.step_dt:5.1f}   {norm.mean():7.2f} {norm.max():7.2f}   | "
+                f"{m[0]:7.2f} {m[1]:6.2f} {m[2]:6.2f}  | {a[0]:5.2f}  {a[1]:5.2f}  {a[2]:5.2f}  | "
+                f"{np.linalg.norm(track, axis=-1).mean():6.2f}  {track[..., 2].mean():7.2f}   | "
+                f"{cable_length:6.3f}  | {model_z:7.2f}  {aim_z:7.2f}",
+                flush=True,
+            )
 
     print(f"[CHECK] {checked} steps x {teacher.num_envs} envs")
     print(f"[CHECK] payload_ref_horizon  max |obs - teacher|        = {worst['ref']:.2e}")

@@ -3,14 +3,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Fly N flycranes to N independent random payload poses, each with its own NMPC.
-"""
+"""Fly N flycranes to N independent random payload poses, each with its own NMPC."""
 
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-import torch
 
+import torch
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -37,10 +36,8 @@ from datetime import datetime
 
 import gymnasium as gym
 import numpy as np
-
 from IL_mav_carry_ext.mpc import MpcTeacherWrapper
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
-
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.dict import print_dict
 
@@ -77,7 +74,6 @@ def main():
 
     print("-" * 80)
     num_envs = env.unwrapped.num_envs
-    step_dt = env.unwrapped.step_dt
 
     env.reset()
     while simulation_app.is_running():

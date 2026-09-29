@@ -15,7 +15,6 @@ Usage:
 import argparse
 
 import torch
-
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Fly one flycrane along a figure eight.")
@@ -39,14 +38,12 @@ from datetime import datetime
 
 import gymnasium as gym
 import numpy as np
-from scipy.spatial.transform import Rotation
-
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
-
 from isaaclab.envs import ManagerBasedRLEnv
 from python_mpc_cusadi import DroneCfg, LoadState, PlantCfg, TeacherPolicy, TuningCfg
 from python_mpc_cusadi.backends.acados_cpu import AcadosBackend
 from python_mpc_cusadi.signals.specs import FigureEight
+from scipy.spatial.transform import Rotation
 
 # current flycrane configuration
 FLYCRANE = PlantCfg(
@@ -124,8 +121,10 @@ def main():
     policy.set_reference(spec.build())
 
     print(f"[INFO]: MPC N={backend.N} nx={backend.nx} drones={policy.num_drones}")
-    print(f"[INFO]: figure eight, amplitude {spec.amplitude} m, period {spec.period} s, "
-          f"centred {np.round(spec.center, 2)}")
+    print(
+        f"[INFO]: figure eight, amplitude {spec.amplitude} m, period {spec.period} s, "
+        f"centred {np.round(spec.center, 2)}"
+    )
     print(f"[INFO]: {steps} steps at {1.0 / step_dt:.0f} Hz")
     print("-" * 80)
 
@@ -154,8 +153,10 @@ def main():
 
             if count % 50 == 0:
                 ref = policy.traj.state_at(min(count, len(policy.traj) - 1))
-                print(f"t={stime:6.2f}s  pos_err={np.linalg.norm(state.p - ref.p):5.2f} m  "
-                      f"ref=[{ref.p[0]:5.2f} {ref.p[1]:5.2f} {ref.p[2]:5.2f}]")
+                print(
+                    f"t={stime:6.2f}s  pos_err={np.linalg.norm(state.p - ref.p):5.2f} m  "
+                    f"ref=[{ref.p[0]:5.2f} {ref.p[1]:5.2f} {ref.p[2]:5.2f}]"
+                )
 
     env.close()
 

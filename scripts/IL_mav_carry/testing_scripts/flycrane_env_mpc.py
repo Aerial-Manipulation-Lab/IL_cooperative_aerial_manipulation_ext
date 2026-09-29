@@ -17,8 +17,8 @@ Pass --rebuild once per machine: acados artifacts embed absolute paths.
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-import torch
 
+import torch
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -43,14 +43,20 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import numpy as np
-from scipy.spatial.transform import Rotation
-
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
-
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.dict import print_dict
-from python_mpc_cusadi import CableState, DroneCfg, LoadState, PlantCfg, TeacherPolicy, Trajectory, TuningCfg
+from python_mpc_cusadi import (
+    CableState,
+    DroneCfg,
+    LoadState,
+    PlantCfg,
+    TeacherPolicy,
+    Trajectory,
+    TuningCfg,
+)
 from python_mpc_cusadi.backends.acados_cpu import AcadosBackend
+from scipy.spatial.transform import Rotation
 
 # where the payload should go: position in the env frame, orientation XYZW
 GOAL_POS = np.array([0.0, 0.0, 1.5])
@@ -70,7 +76,10 @@ FLYCRANE = PlantCfg(
 
 def hover_trajectory():
     """The goal pose as a two-sample trajectory. The sampler clamps outside it."""
-    tile = lambda v: np.repeat(np.asarray(v, dtype=float).reshape(1, -1), 2, axis=0)
+
+    def tile(v):
+        return np.repeat(np.asarray(v, dtype=float).reshape(1, -1), 2, axis=0)
+
     return Trajectory(
         time=np.array([0.0, 1e4]),
         p=tile(GOAL_POS),
@@ -190,8 +199,11 @@ def main():
             )
 
             drone_p = (
-                robot.data.body_com_state_w.torch[0, falcon_idx, :3] - env.unwrapped.scene.env_origins[0]
-            ).cpu().numpy().astype(float)
+                (robot.data.body_com_state_w.torch[0, falcon_idx, :3] - env.unwrapped.scene.env_origins[0])
+                .cpu()
+                .numpy()
+                .astype(float)
+            )
 
             if count == 0:
                 print_geometry(state.p, quat, drone_p)
@@ -212,7 +224,9 @@ def main():
                 # pos_err with a small track_err means the plan is wrong, the
                 # other way round means the drones cannot fly the plan.
                 pos_err = float(np.linalg.norm(state.p - GOAL_POS))
-                ori_err = float(np.degrees((Rotation.from_quat(quat).inv() * Rotation.from_quat(GOAL_QUAT)).magnitude()))
+                ori_err = float(
+                    np.degrees((Rotation.from_quat(quat).inv() * Rotation.from_quat(GOAL_QUAT)).magnitude())
+                )
                 track_err = float(np.max(np.linalg.norm(drones.p[1] - drone_p, axis=-1)))
                 solve_ms = 1e3 * (policy.t_encode_sample + policy.t_solver + policy.t_decode)
                 print(
@@ -221,21 +235,19 @@ def main():
                 )
 
             # step the environment
-            obs, rew, terminated, truncated, info = env.step(waypoint)
+            _obs, _rew, terminated, truncated, _info = env.step(waypoint)
             stime += step_dt
             count += 1
 
             # the env auto-resets on termination; the MPC's warm start is then stale
             if bool(terminated[0]) or bool(truncated[0]):
                 print(
-                    f"[INFO]: episode ended at t={stime:.2f}s "
-                    f"({', '.join(fired_terminations(env))}), resetting the MPC"
+                    f"[INFO]: episode ended at t={stime:.2f}s ({', '.join(fired_terminations(env))}), resetting the MPC"
                 )
                 policy.reset()  # keeps the reference, drops the warm start
 
-            if args_cli.video:
-                if count == args_cli.video_length:
-                    break
+            if args_cli.video and count == args_cli.video_length:
+                break
 
     # close the simulator
     env.close()

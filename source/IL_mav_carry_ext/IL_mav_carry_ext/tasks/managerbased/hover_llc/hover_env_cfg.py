@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import math
 
-import IL_mav_carry_ext.tasks.managerbased.mdp_llc as mdp
-
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -16,16 +14,19 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
-from isaaclab.utils.configclass import configclass  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
+from isaaclab.utils.configclass import (
+    configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
+)
 from isaaclab.utils.noise import GaussianNoiseCfg
+
+import IL_mav_carry_ext.tasks.managerbased.mdp_llc as mdp
+from IL_mav_carry_ext.assets import FLYCRANE_CFG
 
 
 # Isaac Lab 3.0 folded AdditiveGaussianNoiseCfg into GaussianNoiseCfg(operation="add")
 def Gnoise(**kwargs):
     return GaussianNoiseCfg(operation="add", **kwargs)
 
-
-from IL_mav_carry_ext.assets import FLYCRANE_CFG  # isort:skip
 
 # Define the scene configuration
 

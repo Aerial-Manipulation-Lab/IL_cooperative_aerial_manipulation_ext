@@ -30,8 +30,12 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Record NMPC teacher demonstrations.")
 parser.add_argument("--num_envs", type=int, default=8, help="Flycranes flying in parallel.")
 parser.add_argument("--num_episodes", type=int, default=200, help="Stop once this many episodes are written.")
-parser.add_argument("--output", type=str, default="datasets/mpc_demos",
-                    help="Dataset path without extension; .hdf5 and .meta.json are added.")
+parser.add_argument(
+    "--output",
+    type=str,
+    default="datasets/mpc_demos",
+    help="Dataset path without extension; .hdf5 and .meta.json are added.",
+)
 parser.add_argument("--seed", type=int, default=0, help="Env seed; use a different one per run to merge.")
 parser.add_argument("--overwrite", action="store_true", default=False, help="Replace an existing dataset.")
 parser.add_argument("--rebuild", action="store_true", default=False, help="Regenerate the acados solver first.")
@@ -57,10 +61,12 @@ import math
 import time
 
 import torch
-
-from IL_mav_carry_ext.mpc import MpcRecorderManagerCfg, MpcTeacherWrapper, dataset_metadata
+from IL_mav_carry_ext.mpc import (
+    MpcRecorderManagerCfg,
+    MpcTeacherWrapper,
+    dataset_metadata,
+)
 from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
-
 from isaaclab.envs import ManagerBasedRLEnv
 
 HEARTBEAT_S = 10.0
@@ -95,8 +101,11 @@ def main():
     episode_steps = int(base.max_episode_length)
     # a lower bound: episodes that crash early end sooner, so the eta only shrinks
     total_steps = math.ceil(args_cli.num_episodes / args_cli.num_envs) * episode_steps
-    print(f"[INFO]: {args_cli.num_episodes} episodes of {episode_steps} steps on {args_cli.num_envs} envs: "
-          f"about {total_steps} env steps; progress every {HEARTBEAT_S:.0f} s", flush=True)
+    print(
+        f"[INFO]: {args_cli.num_episodes} episodes of {episode_steps} steps on {args_cli.num_envs} envs: "
+        f"about {total_steps} env steps; progress every {HEARTBEAT_S:.0f} s",
+        flush=True,
+    )
 
     env.reset()
     start = last_beat = time.time()

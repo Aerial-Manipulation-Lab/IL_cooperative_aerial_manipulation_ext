@@ -117,16 +117,20 @@ def main():
     lengths = np.asarray(lengths)
     successes = np.asarray(successes)
     ok_frac = np.concatenate(ok_steps).mean()
-    full_len = int(round(meta["episode_length_s"] / dt))
+    full_len = round(meta["episode_length_s"] / dt)
 
     print(f"\n{stem}.hdf5")
-    print(f"  episodes {len(demos)}, successful {successes.sum()} ({successes.mean():.0%}), "
-          f"steps {lengths.sum()} ({lengths.sum() * dt / 60:.1f} min of flight)")
-    print(f"  episode length: min {lengths.min()}, median {int(np.median(lengths))}, max {lengths.max()} "
-          f"(full episode is {full_len} steps)")
+    print(
+        f"  episodes {len(demos)}, successful {successes.sum()} ({successes.mean():.0%}), "
+        f"steps {lengths.sum()} ({lengths.sum() * dt / 60:.1f} min of flight)"
+    )
+    print(
+        f"  episode length: min {lengths.min()}, median {int(np.median(lengths))}, max {lengths.max()} "
+        f"(full episode is {full_len} steps)"
+    )
     print(f"  steps with a successful solve: {ok_frac:.2%}")
     worst = np.argsort([s.mean() for s in ok_steps])[:3]
-    print(f"  worst episodes by solve rate: " + ", ".join(f"{demos[i]} {ok_steps[i].mean():.1%}" for i in worst))
+    print("  worst episodes by solve rate: " + ", ".join(f"{demos[i]} {ok_steps[i].mean():.1%}" for i in worst))
 
     print("\nchecks")
     check(shapes_ok, f"shapes match meta: obs (n, {obs_dim}), horizon (n, {D}, {K}, 12), action (n, {D * 12})")
@@ -138,21 +142,25 @@ def main():
     print("\nlabel statistics (all drones and nodes, successful solves)")
     for part, rows in label_parts.items():
         rows = np.concatenate(rows)
-        print(f"  {part}: mean {np.round(rows.mean(0), 3)}  std {np.round(rows.std(0), 3)}  "
-              f"min {np.round(rows.min(0), 2)}  max {np.round(rows.max(0), 2)}")
+        print(
+            f"  {part}: mean {np.round(rows.mean(0), 3)}  std {np.round(rows.std(0), 3)}  "
+            f"min {np.round(rows.min(0), 2)}  max {np.round(rows.max(0), 2)}"
+        )
 
     if goal_err:
         # successful episodes should all run the full length (checked above);
         # cut to the shortest so the table still prints if they do not
         common = min(len(e) for e in goal_err)
         goal_err = np.stack([e[:common] for e in goal_err])
-        print(f"\ngoal error over the episode, successful episodes (ramp ends at 3 s)")
+        print("\ngoal error over the episode, successful episodes (ramp ends at 3 s)")
         for t in np.arange(0.0, common * dt, 1.0):
-            k = min(int(round(t / dt)), common - 1)
+            k = min(round(t / dt), common - 1)
             e = goal_err[:, k] * 100
             print(f"  t={t:3.0f}s  mean {e.mean():6.2f} cm  p90 {np.percentile(e, 90):6.2f} cm  max {e.max():6.2f} cm")
         final = goal_err[:, -1] * 100
-        print(f"  end    mean {final.mean():6.2f} cm  p90 {np.percentile(final, 90):6.2f} cm  max {final.max():6.2f} cm")
+        print(
+            f"  end    mean {final.mean():6.2f} cm  p90 {np.percentile(final, 90):6.2f} cm  max {final.max():6.2f} cm"
+        )
 
     if args.plot is not None:
         plot_episode(stem, meta, slices, args.plot)
@@ -182,7 +190,7 @@ def plot_episode(stem, meta, slices, index):
     drone0 = horizon[:, 0, 1, :3]
 
     fig, axes = plt.subplots(3, 1, sharex=True, figsize=(9, 8))
-    for i, (ax, axis) in enumerate(zip(axes, "xyz")):
+    for i, (ax, axis) in enumerate(zip(axes, "xyz", strict=True)):
         ax.plot(t, payload[:, i], label="payload")
         ax.plot(t, ref[:, i], "--", label="reference (node 0)")
         ax.plot(t, goal[:, i], ":", label="goal")

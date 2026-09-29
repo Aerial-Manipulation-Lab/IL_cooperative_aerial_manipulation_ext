@@ -1,17 +1,14 @@
 import torch
-
-from IL_mav_carry_ext.controllers.utils import LowPassFilter
-
 from isaaclab.utils.math import (
-    euler_xyz_from_quat,
     matrix_from_quat,
     normalize,
+    quat_apply,
     quat_from_matrix,
     quat_inv,
     quat_mul,
-    quat_apply,
-    quat_apply_inverse,
 )
+
+from IL_mav_carry_ext.controllers.utils import LowPassFilter
 
 
 class GeometricController:
@@ -53,7 +50,7 @@ class GeometricController:
         self.kp_rate = torch.tensor([25.0, 25.0, 8.0], device=self.device)
         self.kp_att_xy = 150.0
         self.kp_att_z = 5.0
-        
+
         # low pass filters
         self.filter_sampling_frequency = torch.full(
             (self.num_envs, 1), 300.0, device=self.device
@@ -144,7 +141,6 @@ class GeometricController:
         # the world up axis, i.e. hold a level attitude when no acceleration is commanded.
         degenerate = z_b_des.norm(dim=-1, keepdim=True) < 0.5
         z_b_des = torch.where(degenerate, torch.tensor([0.0, 0.0, 1.0], device=z_b_des.device), z_b_des)
-        collective_thrust_des_magntiude = torch.norm(acc_cmd, dim=1, keepdim=True) * self.falcon_mass
         current_collective_thrust_magnitude = torch.norm(current_collective_thrust, dim=1, keepdim=True)
 
         # attitude command

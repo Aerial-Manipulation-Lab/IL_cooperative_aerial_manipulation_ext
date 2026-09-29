@@ -19,7 +19,6 @@ terms read; the recording script switches it on with
 """
 
 import numpy as np
-
 from isaaclab.envs.mdp.recorders.recorders_cfg import (
     InitialStateRecorderCfg,
     PostStepStatesRecorderCfg,
@@ -108,7 +107,7 @@ def dataset_metadata(env, teacher) -> dict:
     return {
         "obs_terms": [
             {"name": name, "dim": int(np.prod(dim))}
-            for name, dim in zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"])
+            for name, dim in zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=False)
         ],
         "obs_per_drone_terms": "terms named drone_* are drone-major blocks, one per drone",
         "payload_ref_horizon_layout": "per node: dp(3), v(3), a(3), rot6d(6), w(3)",

@@ -26,7 +26,6 @@ from datetime import datetime
 import h5py
 import numpy as np
 import torch
-
 from IL_mav_carry_ext.imitation import PLAN_DIM, BCPolicy, FeatureSpec, save_checkpoint
 
 
@@ -79,7 +78,7 @@ def load_episodes(paths):
 def split(episodes, val_frac, seed):
     """Stack into per-drone samples, split by episode: (x_train, y_train, x_val, y_val)."""
     order = np.random.default_rng(seed).permutation(len(episodes))
-    n_val = max(1, int(round(val_frac * len(episodes))))
+    n_val = max(1, round(val_frac * len(episodes)))
     if n_val >= len(episodes):
         raise ValueError(f"need more than {n_val} episodes to hold {n_val} out for validation")
 
@@ -128,7 +127,10 @@ def evaluate(model, x, y, spec, batch_size):
         sq_err += ((pred_phys - yb) ** 2).reshape(-1, spec.num_nodes, PLAN_DIM).sum(0)
     # root mean square error per node and plan component, then per 3-vector
     rmse = (sq_err / len(x)).sqrt()
-    vec = lambda node, part: float(rmse[node, part].norm())
+
+    def vec(node, part):
+        return float(rmse[node, part].norm())
+
     p, v, a, w = slice(0, 3), slice(3, 6), slice(6, 9), slice(9, 12)
     return {
         "val/loss": loss / y.numel(),
@@ -151,8 +153,10 @@ def main():
     episodes, spec = load_episodes(args.datasets)
     x_train, y_train, x_val, y_val = (t.to(args.device) for t in split(episodes, args.val_frac, args.seed))
     del episodes
-    print(f"[INFO]: {len(x_train)} train / {len(x_val)} val samples, "
-          f"input {spec.input_dim}, label {spec.label_dim} ({spec.num_nodes} nodes x {PLAN_DIM})")
+    print(
+        f"[INFO]: {len(x_train)} train / {len(x_val)} val samples, "
+        f"input {spec.input_dim}, label {spec.label_dim} ({spec.num_nodes} nodes x {PLAN_DIM})"
+    )
 
     model = BCPolicy(spec.input_dim, spec.label_dim, tuple(args.hidden)).to(args.device)
     model.set_normalisation(x_train, y_train)

@@ -44,7 +44,7 @@ class FeatureSpec:
         self.num_drones = meta["num_drones"]
         self.num_nodes = meta["num_nodes"]
         self.slices = {}
-        self.start = 0
+        start = 0
 
         for term in meta["obs_terms"]:
             self.slices[term["name"]] = slice(start, start + term["dim"])

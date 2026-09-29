@@ -6,16 +6,15 @@ the curriculum introduced by the function.
 
 from __future__ import annotations
 
-import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
+
+import torch
 
 import IL_mav_carry_ext.tasks.managerbased.mdp_llc as mdp
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-
-from isaaclab.managers import CurriculumTermCfg as CurrTerm
 
 
 def modify_obstacle_position(
