@@ -3,21 +3,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What the uniform per-drone student sees and predicts, in one place.
-
-Training builds its samples through here and deployment builds the student's
-inputs through here, so the two can never disagree about which obs columns go
-in or what the output means. Everything is read by obs term *name*, through the
-layout the recorder wrote into the dataset's `.meta.json`.
-
-The student is one network run once per drone (shared weights). Drone d's input
-is the payload's state and reference, which every drone shares, then drone d's
-own block of each per-drone term, then drone d's attach point on the payload,
-which is what tells the shared network which corner it holds. Its output is
-drone d's own plan over the MPC horizon, expressed relative to drone d itself
-(see `LABEL_FRAME`).
-"""
-
 import torch
 
 SHARED_TERMS = (
@@ -58,7 +43,9 @@ class FeatureSpec:
         self.meta = meta
         self.num_drones = meta["num_drones"]
         self.num_nodes = meta["num_nodes"]
-        self.slices, start = {}, 0
+        self.slices = {}
+        self.start = 0
+
         for term in meta["obs_terms"]:
             self.slices[term["name"]] = slice(start, start + term["dim"])
             start += term["dim"]

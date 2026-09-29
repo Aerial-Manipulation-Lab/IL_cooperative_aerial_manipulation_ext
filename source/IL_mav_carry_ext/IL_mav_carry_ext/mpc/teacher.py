@@ -5,6 +5,9 @@
 
 """NMPC teacher that computes per-env drone setpoints from Isaac Lab state."""
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
@@ -29,7 +32,7 @@ class MpcTeacher:
     COMMAND_NAME = "pose_command"
     """Command term the ramped references are read from."""
 
-    def __init__(self, env, plant=FLYCRANE_SIM, tuning=None, rebuild=False, verbose=True):
+    def __init__(self, env, plant=FLYCRANE_SIM, tuning=None, rebuild=False, verbose=True, solve_threads=None):
         base = env.unwrapped
         self.env = base
         self.plant = plant
@@ -71,6 +74,18 @@ class MpcTeacher:
               f"drones={self.policies[0].num_drones}")
         print(f"[INFO]: solving every env step, {1.0 / self.step_dt:.0f} Hz")
 
+        # One solve per env side by side: acados is called through ctypes,
+        # which releases the GIL for the C solve, so the solves of different
+        # envs overlap (each env has its own solver memory, and the results
+        # are bitwise the ones a sequential loop gives). What stays serial is
+        # the Python around each solve, which caps the gain at ~3.5x. How to
+        # parallelise is really the backend's business: once a batched backend
+        # (CusADi) exists, this pool belongs behind a batch interface in
+        # python_mpc_cusadi, next to the acados backend it is specific to.
+        self.solve_threads = solve_threads or min(self.num_envs, os.cpu_count() or 1)
+        self._pool = ThreadPoolExecutor(self.solve_threads)
+        print(f"[INFO]: solving on {self.solve_threads} threads")
+
     def measured_load_state(self, i: int, time: float) -> LoadState:
         """Env-frame state of env i's payload.
 
@@ -80,9 +95,13 @@ class MpcTeacher:
         here, so everything past this point is pure MPC convention.
         """
         row = self.robot.data.body_com_state_w.torch[i, self.load_idx].cpu().numpy().astype(float)
+        return self._load_state(row, self.env_origins[i].cpu().numpy(), time)
+
+    @staticmethod
+    def _load_state(row, origin, time) -> LoadState:
         return LoadState(
             time=time,
-            p=row[:3] - self.env_origins[i].cpu().numpy(),
+            p=row[:3] - origin,
             q=row[3:7],
             v=row[7:10],
             w=Rotation.from_quat(row[3:7]).as_matrix().T @ row[10:13],
@@ -96,7 +115,10 @@ class MpcTeacher:
         same sim buffer, and `a` is a command, not a measurement.
         """
         rows = self.robot.data.body_com_state_w.torch[i, self.falcon_idx].cpu().numpy().astype(float)
-        origin = self.env_origins[i].cpu().numpy()
+        return self._drone_states(rows, self.env_origins[i].cpu().numpy(), time)
+
+    @staticmethod
+    def _drone_states(rows, origin, time) -> list[DroneState]:
         return [DroneState(time=time, p=row[:3] - origin, v=row[7:10], w=row[10:13])
                 for row in rows]
 
@@ -121,19 +143,27 @@ class MpcTeacher:
         whose solve failed are listed in `last_failed`; their setpoints are
         still emitted (the solver's last iterate) but are not trustworthy.
         """
-        waypoint = torch.zeros_like(self.env.action_manager.action)
+        # everything crossing into the policy is measured, env frame
+        # (quaternions XYZW here and in the MPC, angular velocity in the
+        # payload body frame); one device-to-host copy for all envs
+        rows = self.robot.data.body_com_state_w.torch[:, [self.load_idx, *self.falcon_idx]].cpu().numpy()
+        rows = rows.astype(float)
+        origins = self.env_origins.cpu().numpy()
+        measured = [
+            (self._load_state(rows[i, 0], origins[i], stime), self._drone_states(rows[i, 1:], origins[i], stime))
+            for i in range(self.num_envs)
+        ]
 
+        solves = list(self._pool.map(
+            lambda i: self.policies[i].solve(stime, *measured[i]), range(self.num_envs)
+        ))
+
+        waypoint = np.zeros(tuple(self.env.action_manager.action.shape))
+        horizon = np.zeros(tuple(self.last_horizon.shape))
         pos_errs = []
         self.last_failed = []
-        for i in range(self.num_envs):
-            # everything crossing into the policy is measured, env frame
-            # (quaternions XYZW here and in the MPC, angular velocity in the
-            # payload body frame)
-            measured_load = self.measured_load_state(i, stime)
-            measured_drones = self.measured_drone_states(i, stime)
-
-            policy = self.policies[i]
-            predicted_drones, predicted_load, status = policy.solve(stime, measured_load, measured_drones)
+        for i, (predicted_drones, predicted_load, status) in enumerate(solves):
+            measured_load, policy = measured[i][0], self.policies[i]
             self.last_load_horizon[i] = predicted_load.p
             if status != OCPStatus.SUCCESS:
                 # a failed QP means the setpoints below are not trustworthy.
@@ -150,22 +180,18 @@ class MpcTeacher:
                     )
                 self.last_failed.append(i)
 
-            # the setpoints to apply now: horizon node 1, 10 ms ahead, i.e.
-            # the next environment step
-            for d, next_setpoint in enumerate(predicted_drones.state_next):
-                setpoint = np.concatenate([next_setpoint.p, next_setpoint.v,
-                                           next_setpoint.a, np.zeros(3)])
-                waypoint[i, d * 12 : (d + 1) * 12] = torch.as_tensor(setpoint, device=self.env.device)
-
-            # the whole plan the action above is node 1 of: (nodes, drones, 12)
-            # from the solver, stored drone-major
+            # the whole plan, (nodes, drones, 12) from the solver, stored
+            # drone-major; the setpoints to apply now are its node 1, 10 ms
+            # ahead, i.e. the next environment step, with zeros after p, v, a
             plan = np.concatenate([predicted_drones.p, predicted_drones.v,
-                                   predicted_drones.a, predicted_drones.w], axis=-1)
-            self.last_horizon[i] = torch.as_tensor(plan.transpose(1, 0, 2), device=self.env.device)
+                                   predicted_drones.a, predicted_drones.w], axis=-1).transpose(1, 0, 2)
+            horizon[i] = plan
+            waypoint[i] = np.concatenate([plan[:, 1, :9], np.zeros((self.num_drones, 3))], axis=-1).reshape(-1)
 
             # p[-1], not p[0]: the reference is a ramp now, so its last
             # sample is the goal and its first is where the ramp began.
             pos_errs.append(float(np.linalg.norm(measured_load.p - policy.traj.p[-1])))
 
         self.last_pos_err = np.asarray(pos_errs)
-        return waypoint
+        self.last_horizon = torch.as_tensor(horizon, dtype=self.last_horizon.dtype, device=self.env.device)
+        return torch.as_tensor(waypoint, dtype=self.env.action_manager.action.dtype, device=self.env.device)

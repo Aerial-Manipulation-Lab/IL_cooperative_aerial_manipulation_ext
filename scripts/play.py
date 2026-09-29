@@ -1,24 +1,4 @@
-"""Roll out a trained student, optionally with a viewport or video recording.
-
-The student flies (`--beta 0`, the default) while the NMPC teacher keeps
-solving alongside, so every step also yields the label for the state the
-*student* put the system in. That gives two kinds of numbers:
-
-  - outcome: how many episodes run to the end without crashing, and how close
-    to the goal the payload ends up;
-  - label error: how far the student's executed setpoint is from the one the
-    teacher would have commanded in the same state. Growing along an episode,
-    it is the drift off the training distribution that DAgger addresses.
-
-`--beta 1` flies the teacher through the very same script: the baseline the
-student's outcome is compared against. A failed teacher solve does not reset
-the episode here (it says nothing about the student); it is only counted.
-
-Example, from the repo root:
-
-    ./docker/dev.sh run --rm isaac bash -c '$ISAAC_PY \
-        IL_cooperative_aerial_manipulation_ext/scripts/play.py \
-        --headless --checkpoint logs/bc/<run>/best.pt --num_episodes 20'
+"""Roll out a trained student next to the NMPC teacher.
 """
 
 """Launch Isaac Sim Simulator first."""
