@@ -8,13 +8,11 @@
 from ..plants import FLYCRANE, FLYCRANE_SIM
 from .recorders import MpcRecorderManagerCfg, dataset_metadata
 from .teacher import MpcTeacher
-from .wrapper import MpcTeacherWrapper
 
 __all__ = [
     "FLYCRANE",
     "FLYCRANE_SIM",
     "MpcRecorderManagerCfg",
     "MpcTeacher",
-    "MpcTeacherWrapper",
     "dataset_metadata",
 ]

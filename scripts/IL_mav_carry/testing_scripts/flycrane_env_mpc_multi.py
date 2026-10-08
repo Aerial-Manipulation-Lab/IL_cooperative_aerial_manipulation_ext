@@ -35,9 +35,7 @@ simulation_app = app_launcher.app
 from datetime import datetime
 
 import gymnasium as gym
-import numpy as np
-from IL_mav_carry_ext.mpc import MpcTeacherWrapper
-from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
+from IL_mav_carry_ext.tasks.managerbased.flycrane.flycrane_env_cfg import ApproachPoseEnvCfg
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.dict import print_dict
 
@@ -45,7 +43,7 @@ from isaaclab.utils.dict import print_dict
 def main():
     """Main function."""
     # create environment config
-    env_cfg = HoverEnvCfg_llc()
+    env_cfg = ApproachPoseEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
     # the MPC gives position/velocity/acceleration per drone, i.e. geometric mode
     env_cfg.actions.low_level_action.control_mode = "geometric"
@@ -54,11 +52,11 @@ def main():
     env_cfg.viewer.asset_name = "robot"
     env_cfg.viewer.eye = (14, 14, 14)
     env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
+    env_cfg.commands.pose_command.rebuild = args_cli.rebuild
 
-    env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    # the NMPC teacher is the policy; reset() also seeds each env's ramped goal
-    teacher_env = MpcTeacherWrapper(env, rebuild=args_cli.rebuild)
-    env = teacher_env
+    base = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    command = base.command_manager.get_term("pose_command")
+    env = base
     if args_cli.video:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         video_kwargs = {
@@ -70,26 +68,25 @@ def main():
         }
         print("[INFO] Recording videos during execution.")
         print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(teacher_env, **video_kwargs)
+        env = gym.wrappers.RecordVideo(base, **video_kwargs)
 
     print("-" * 80)
-    num_envs = env.unwrapped.num_envs
-
     env.reset()
+    step = 0
     while simulation_app.is_running():
         with torch.inference_mode():
-            # the teacher's solve is the action; RecordVideo has no default
-            env.step(None)
+            env.step(command.teacher.action)
+        step += 1
 
-            if teacher_env.count % 50 == 0:
-                pos_err = teacher_env.teacher.last_pos_err
-                print(
-                    f"t={teacher_env.time:6.2f}s  pos_err mean={np.mean(pos_err):5.2f} m  "
-                    f"max={np.max(pos_err):5.2f} m  (across {num_envs} envs)"
-                )
+        if step % 50 == 0:
+            pos_err = command.metrics["position_error"]
+            print(
+                f"t={step * base.step_dt:6.2f}s  pos_err mean={pos_err.mean():5.2f} m  "
+                f"max={pos_err.max():5.2f} m  (across {base.num_envs} envs)"
+            )
 
-            if args_cli.video and teacher_env.count == args_cli.video_length:
-                break
+        if args_cli.video and step == args_cli.video_length:
+            break
 
     # close the simulator
     env.close()

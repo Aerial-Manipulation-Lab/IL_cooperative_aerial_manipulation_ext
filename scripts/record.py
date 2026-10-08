@@ -9,7 +9,7 @@ Example, from the repo root:
 
     ./docker/dev.sh run --rm isaac bash -c '$ISAAC_PY \
         IL_cooperative_aerial_manipulation_ext/scripts/record.py \
-        --headless --num_envs 8 --num_episodes 200 --output datasets/mpc_demos'
+        --headless --task Flycrane-ApproachPose-v0 --num_envs 8 --num_episodes 200 --output datasets/mpc_demos'
 """
 
 import argparse
@@ -17,6 +17,12 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Record NMPC teacher demonstrations.")
+parser.add_argument(
+    "--task",
+    type=str,
+    required=True,
+    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random), Flycrane-FigureEightA2-v0 or Flycrane-FigureEightA4-v0.",
+)
 parser.add_argument("--num_envs", type=int, default=8, help="Flycranes flying in parallel.")
 parser.add_argument("--num_episodes", type=int, default=200, help="Stop once this many episodes are written.")
 parser.add_argument(
@@ -50,42 +56,38 @@ import math
 import time
 
 import torch
-from IL_mav_carry_ext.mpc import (
-    MpcRecorderManagerCfg,
-    MpcTeacherWrapper,
-    dataset_metadata,
-)
-from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
+from IL_mav_carry_ext.mpc import MpcRecorderManagerCfg, dataset_metadata
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab_tasks.utils import parse_env_cfg
 
 HEARTBEAT_S = 10.0
 
 
-def print_heartbeat(base, steps, total_steps, elapsed, num_written, episode_steps):
-    sim_s = float(base.episode_length_buf.float().mean()) * base.step_dt
+def print_heartbeat(env, steps, total_steps, elapsed, num_written, episode_steps):
+    sim_s = float(env.episode_length_buf.float().mean()) * env.step_dt
     eta_min = elapsed / steps * max(total_steps - steps, 0) / 60
     print(
-        f"[REC]   step {steps}/{total_steps} | episode time {sim_s:4.1f}/{episode_steps * base.step_dt:.0f} s | "
-        f"{steps * base.num_envs / elapsed:.0f} env-steps/s | "
+        f"[REC]   step {steps}/{total_steps} | episode time {sim_s:4.1f}/{episode_steps * env.step_dt:.0f} s | "
+        f"{steps * env.num_envs / elapsed:.0f} env-steps/s | "
         f"written {num_written}/{args_cli.num_episodes} | eta {eta_min:.1f} min",
         flush=True,
     )
 
 
 def main():
-    env_cfg = HoverEnvCfg_llc()
-    env_cfg.scene.num_envs = args_cli.num_envs
+    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = args_cli.seed
+    env_cfg.commands.pose_command.rebuild = args_cli.rebuild
     env_cfg.recorders = MpcRecorderManagerCfg(
         dataset_export_dir_path=os.path.dirname(output),
         dataset_filename=os.path.basename(output),
     )
 
-    env = MpcTeacherWrapper(ManagerBasedRLEnv(cfg=env_cfg), rebuild=args_cli.rebuild, verbose=False)
-    recorder = env.unwrapped.recorder_manager
-    base = env.unwrapped
+    env = ManagerBasedRLEnv(cfg=env_cfg)
+    teacher = env.command_manager.get_term("pose_command").teacher
+    recorder = env.recorder_manager
 
-    meta = dataset_metadata(env, env.teacher)
+    meta = dataset_metadata(env)
     meta.update(seed=args_cli.seed, num_envs=args_cli.num_envs)
     with open(output + ".meta.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -94,7 +96,7 @@ def main():
     def written():
         return recorder.exported_successful_episode_count + recorder.exported_failed_episode_count
 
-    episode_steps = int(base.max_episode_length)
+    episode_steps = int(env.max_episode_length)
     total_steps = math.ceil(args_cli.num_episodes / args_cli.num_envs) * episode_steps
     print(
         f"[INFO]: {args_cli.num_episodes} episodes of {episode_steps} steps on {args_cli.num_envs} envs: "
@@ -109,9 +111,9 @@ def main():
     last_written = 0
     while simulation_app.is_running() and written() < args_cli.num_episodes:
         with torch.inference_mode():
-            _, _, _, _, info = env.step(None)
+            env.step(teacher.action)
         steps += 1
-        failed_solves += len(info["mpc_failed"])
+        failed_solves += int((~teacher.ok).sum())
         now = time.time()
         num_written = written()
 
@@ -126,7 +128,7 @@ def main():
 
         if now - last_beat >= HEARTBEAT_S:
             last_beat = now
-            print_heartbeat(base, steps, total_steps, now - start, num_written, episode_steps)
+            print_heartbeat(env, steps, total_steps, now - start, num_written, episode_steps)
 
     print(
         f"[INFO]: wrote {written()} episodes ({recorder.exported_successful_episode_count} successful) "

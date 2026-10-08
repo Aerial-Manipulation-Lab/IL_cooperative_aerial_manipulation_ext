@@ -3,9 +3,8 @@
 Isaac Lab extension for imitation learning on cooperative aerial manipulation.
 
 It provides the robot assets (`falcon`, `flycart`, `flycrane`, `flycrane_rod`, `flypent`),
-the low-level controllers (geometric, INDI, motor model), and the Gym task
-registrations under `IL_mav_carry_ext.tasks` for both manager-based and direct MARL
-environments.
+the low-level controllers (geometric, INDI, motor model), the flycrane hover env
+with its NMPC teacher (`IL_mav_carry_ext.tasks`), and the imitation-learning student.
 
 ## Installation
 

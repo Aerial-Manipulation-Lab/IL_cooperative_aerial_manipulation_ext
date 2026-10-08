@@ -24,20 +24,23 @@ FLYCRANE = PlantCfg(
     ),
 )
 
+ROPE_END = np.array([0.0, 0.0, -0.03])
+"""Where the rope meets each drone, in the drone's body frame: Agilicious' attach_point_drone and p_offset."""
+
 # the flycrane as the sim's USD model builds it, read back from the articulation.
 # Differs from the hardware: the attach points are symmetric in x (the hardware
 # values sit 1 cm off, most likely measured from an off-centre payload COM), the
-# payload is lighter and its inertia ~35% smaller, and the cable length is from
-# the payload joint to the drone's COM -- 1 m of rope plus the 3 cm the cable
-# hangs below the drone -- since that is the endpoint the MPC measures.
+# payload is lighter and its inertia ~35% smaller. As in the thesis, a cable is the
+# 1 m of rope only: the MPC plans and measures each drone at its rope end, ROPE_END
+# below the COM, and the low-level controller lifts the COM back above it.
 # Not modelled: the rope's own mass (28 g per cable), and the payload COM sitting
 # 2 cm below the odometry link the MPC takes as the payload's state.
 FLYCRANE_SIM = PlantCfg(
     load_mass=1.40,
     load_inertia=np.array([0.02625, 0.03792, 0.05892]),
     drones=(
-        DroneCfg(mass=0.6168, cable_length=1.03, attach_point=np.array([0.27, 0.22, 0.06])),
-        DroneCfg(mass=0.6168, cable_length=1.03, attach_point=np.array([0.27, -0.22, 0.06])),
-        DroneCfg(mass=0.6168, cable_length=1.03, attach_point=np.array([-0.27, 0.0, 0.06])),
+        DroneCfg(mass=0.6168, cable_length=1.0, attach_point=np.array([0.27, 0.22, 0.06])),
+        DroneCfg(mass=0.6168, cable_length=1.0, attach_point=np.array([0.27, -0.22, 0.06])),
+        DroneCfg(mass=0.6168, cable_length=1.0, attach_point=np.array([-0.27, 0.0, 0.06])),
     ),
 )

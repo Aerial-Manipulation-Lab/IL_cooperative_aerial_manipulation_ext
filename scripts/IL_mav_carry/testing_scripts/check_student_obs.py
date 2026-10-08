@@ -35,12 +35,6 @@ parser.add_argument(
 )
 parser.add_argument("--rebuild", action="store_true", default=False, help="Regenerate the acados solver first.")
 parser.add_argument("--seed", type=int, default=0, help="Env seed, so runs sample the same goals.")
-parser.add_argument(
-    "--plant",
-    choices=["sim", "hw"],
-    default="sim",
-    help="Plant the MPC models: the sim's USD geometry, or the hardware measurements.",
-)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -51,17 +45,13 @@ simulation_app = app_launcher.app
 
 import numpy as np
 import torch
-from IL_mav_carry_ext.mpc import MpcTeacherWrapper
-from IL_mav_carry_ext.plants import FLYCRANE, FLYCRANE_SIM
-from IL_mav_carry_ext.tasks.managerbased.hover_llc.hover_env_cfg import HoverEnvCfg_llc
+from IL_mav_carry_ext.tasks.managerbased.flycrane.flycrane_env_cfg import ApproachPoseEnvCfg
 from IL_mav_carry_ext.tasks.managerbased.mdp_llc import observations as mdp_obs
 from isaaclab.envs import ManagerBasedRLEnv
 from scipy.spatial.transform import Rotation
 
 ROPE_BODIES = "rope_[1-3]_link"
 """The simulated cables' payload ends, one per drone, in drone order."""
-
-PLANT = FLYCRANE_SIM if args_cli.plant == "sim" else FLYCRANE
 
 
 def split_terms(env, obs):
@@ -86,7 +76,7 @@ def expected_ref_horizon(teacher, i, now):
 
 
 def main():
-    env_cfg = HoverEnvCfg_llc()
+    env_cfg = ApproachPoseEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.actions.low_level_action.control_mode = "geometric"
     env_cfg.seed = args_cli.seed
@@ -94,9 +84,9 @@ def main():
         env_cfg.episode_length_s = args_cli.episode_length
     # one full episode by default, so the goal error below covers ramp and settling alike
     num_steps = args_cli.steps or round(env_cfg.episode_length_s / (env_cfg.sim.dt * env_cfg.decimation))
-    env = MpcTeacherWrapper(ManagerBasedRLEnv(cfg=env_cfg), plant=PLANT, rebuild=args_cli.rebuild, verbose=False)
-    print(f"[INFO]: MPC plant: {args_cli.plant}")
-    teacher = env.teacher
+    env_cfg.commands.pose_command.rebuild = args_cli.rebuild
+    env = ManagerBasedRLEnv(cfg=env_cfg)
+    teacher = env.command_manager.get_term("pose_command").teacher
     robot = teacher.robot
     rope_idx = robot.find_bodies(ROPE_BODIES)[0]
 
@@ -113,7 +103,7 @@ def main():
     # goal) separates a consistent offset (e.g. a z sag, same sign in every env)
     # from a lag, whose direction follows each env's goal. Envs reset when an
     # episode ends, so rows past the first episode mix goals.
-    steps_per_s = round(1.0 / teacher.step_dt)
+    steps_per_s = round(1.0 / env.step_dt)
     print(f"[MPC]   goal error over time, {teacher.num_envs} envs (ramp ends at 3 s)", flush=True)
     print(
         "[MPC]              payload - goal                                                  |  drone - setpoint  |"
@@ -128,7 +118,7 @@ def main():
     for step in range(num_steps):
         # the obs in hand is what the next solve acts on, at the env's clock now
         terms = split_terms(env, obs)
-        now = env.time
+        now = env.common_step_counter * env.step_dt
         for i in range(teacher.num_envs):
             got = terms["payload_ref_horizon"][i].reshape(-1, 18)
             worst["ref"] = max(worst["ref"], float(np.abs(got - expected_ref_horizon(teacher, i, now)).max()))
@@ -143,7 +133,8 @@ def main():
         worst["cable_angle_deg"] = max(worst["cable_angle_deg"], float(np.degrees(np.arccos(cos)).max()))
         payload = state[:, teacher.load_idx]
         attach = np.stack(
-            [payload[:, :3] + Rotation.from_quat(payload[:, 3:7]).apply(d.attach_point) for d in PLANT.drones], axis=1
+            [payload[:, :3] + Rotation.from_quat(payload[:, 3:7]).apply(d.attach_point) for d in teacher.plant.drones],
+            axis=1,
         )
         worst["attach_m"] = max(worst["attach_m"], float(np.linalg.norm(attach - rope, axis=-1).max()))
         if step % steps_per_s == 0:
@@ -155,13 +146,14 @@ def main():
             )
         checked += 1
 
+        failed_solves += int((~teacher.ok).sum())
+        # node 1 is the setpoint for one step ahead; the plan is overwritten by the step's solve
+        sent = teacher.action.view(teacher.num_envs, -1, 12)[..., :3].cpu().numpy()
+        load_plan = teacher.load_plan.copy()
         with torch.inference_mode():
-            obs, _, _, _, info = env.step(None)
-        failed_solves += len(info["mpc_failed"])
+            obs, _, _, _, _ = env.step(teacher.action)
 
         if step % steps_per_s == 0:
-            # node 1 is the setpoint for one step ahead, i.e. for right now
-            sent = env.unwrapped.teacher_action.view(teacher.num_envs, -1, 12)[..., :3].cpu().numpy()
             flown = (
                 (robot.data.body_com_state_w.torch[:, teacher.falcon_idx, :3] - teacher.env_origins[:, None])
                 .cpu()
@@ -171,17 +163,17 @@ def main():
             after = robot.data.body_com_state_w.torch[:, teacher.load_idx].cpu().numpy()
             payload_after = after[:, :3] - teacher.env_origins.cpu().numpy()
             attach_after = payload_after[:, None] + np.stack(
-                [Rotation.from_quat(after[:, 3:7]).apply(d.attach_point) for d in PLANT.drones], axis=1
+                [Rotation.from_quat(after[:, 3:7]).apply(d.attach_point) for d in teacher.plant.drones], axis=1
             )
             cable_length = np.linalg.norm(flown - attach_after, axis=-1).mean()
             goal_z = np.array([teacher.policies[i].traj.p[-1][2] for i in range(teacher.num_envs)])
             # this step's solve predicted node 1 for exactly the state after the step
-            model_z = 100 * (teacher.last_load_horizon[:, 1, 2] - payload_after[:, 2]).mean()
-            aim_z = 100 * (teacher.last_load_horizon[:, -1, 2] - goal_z).mean()
+            model_z = 100 * (load_plan[:, 1, 2] - payload_after[:, 2]).mean()
+            aim_z = 100 * (load_plan[:, -1, 2] - goal_z).mean()
             norm = np.linalg.norm(e, axis=-1)
             m, a = e.mean(0), np.abs(e).mean(0)
             print(
-                f"[MPC]     {step * teacher.step_dt:5.1f}   {norm.mean():7.2f} {norm.max():7.2f}   | "
+                f"[MPC]     {step * env.step_dt:5.1f}   {norm.mean():7.2f} {norm.max():7.2f}   | "
                 f"{m[0]:7.2f} {m[1]:6.2f} {m[2]:6.2f}  | {a[0]:5.2f}  {a[1]:5.2f}  {a[2]:5.2f}  | "
                 f"{np.linalg.norm(track, axis=-1).mean():6.2f}  {track[..., 2].mean():7.2f}   | "
                 f"{cable_length:6.3f}  | {model_z:7.2f}  {aim_z:7.2f}",

@@ -72,6 +72,7 @@ class LowLevelAction(ActionTerm):
         for i in range(self._num_drones):
             self.geo_controllers[i] = GeometricController(self.num_envs, self._control_mode)
         self._ll_counter = 0
+        self._tick = 0
         self._constant_yaw = torch.zeros([self._env.num_envs, 1], device=self.device)
         self._zeros = torch.zeros([self._env.num_envs, 3], device=self.device)
         self._desired_position = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
@@ -127,6 +128,10 @@ class LowLevelAction(ActionTerm):
 
     def reset(self, env_ids: Sequence[int]):
         super().reset(env_ids)
+        # back to the startup state: INDI builds on the current rotor forces, so rotors left saturated
+        # by a crash would otherwise flip the drones again right after every restart
+        for buf in (self._forces, self._moments, self._prev_forces, self._drone_prev_acc, self._drone_jerk):
+            buf[env_ids] = 0.0
         for i in range(self._num_drones):
             self.geo_controllers[i].reset(env_ids)
             self._indi_controllers[i].reset(env_ids)
@@ -140,6 +145,7 @@ class LowLevelAction(ActionTerm):
             The processed external forces to be applied to the rotors."""
         self._waypoints = waypoints
         self._prev_forces = self._forces.clone()
+        self._tick = 0
         for i in range(self._num_drones):
             start_drone_idx = i * self._waypoint_dim * self._num_waypoints
             end_drone_idx = (i + 1) * self._waypoint_dim * self._num_waypoints
@@ -150,7 +156,7 @@ class LowLevelAction(ActionTerm):
                 self.drone_setpoint[i]["pos"] = drone_waypoints[:, :3]
                 self.drone_setpoint[i]["lin_vel"] = drone_waypoints[:, 3:6]
                 self.drone_setpoint[i]["lin_acc"] = drone_waypoints[:, 6:9]
-                self.drone_setpoint[i]["jerk"] = drone_waypoints[:, 9:12]
+                self.drone_setpoint[i]["body_rates"] = drone_waypoints[:, 9:12]
 
                 self._desired_position[:, i] = self.drone_setpoint[i]["pos"]
 
@@ -195,7 +201,17 @@ class LowLevelAction(ActionTerm):
                 drone_angular_accelerations  # + torch.randn_like(drone_angular_accelerations) * self.angular_acceleration_noise_std
             )
 
+            # the setpoint is for the end of this env step; like Agilicious' time sampler, track it at this tick's time
+            lead = self._env.step_dt - self._tick * self._env.physics_dt
             for i in range(self._num_drones):
+                setpoint = self.drone_setpoint[i]
+                if self._control_mode == "geometric":
+                    v, a = setpoint["lin_vel"], setpoint["lin_acc"]
+                    setpoint = {
+                        **setpoint,
+                        "pos": setpoint["pos"] - v * lead + 0.5 * a * lead**2,
+                        "lin_vel": v - a * lead,
+                    }
                 drone_states: dict = {}  # dict of tensors
                 drone_states["pos"] = self.drone_positions[:, i]
                 drone_states["quat"] = self.drone_orientations[:, i]
@@ -209,7 +225,7 @@ class LowLevelAction(ActionTerm):
                 self._drone_prev_acc[:, i] = drone_states["lin_acc"]
 
                 alpha_cmd, acc_load, acc_cmd, q_cmd = self.geo_controllers[i].getCommand(
-                    drone_states, self._forces[:, i * 4 : i * 4 + 4], self.drone_setpoint[i]
+                    drone_states, self._forces[:, i * 4 : i * 4 + 4], setpoint
                 )
                 target_rpm = self._indi_controllers[i].getCommand(
                     drone_states, self._forces[:, i * 4 : i * 4 + 4], alpha_cmd, acc_cmd, acc_load
@@ -231,6 +247,7 @@ class LowLevelAction(ActionTerm):
             self._moments[..., 2] = torques.view(self.num_envs, self._num_drones, 4).sum(-1)
             self._ll_counter = 0
         self._ll_counter += 1
+        self._tick += 1
 
         # Isaac Lab 3.0: reset once, then compose both wrenches (see marl_hover_env for why).
         robot = self._env.scene["robot"]

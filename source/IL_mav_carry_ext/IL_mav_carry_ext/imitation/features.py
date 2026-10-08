@@ -106,7 +106,5 @@ class FeatureSpec:
     @staticmethod
     def plan_to_action(plan: torch.Tensor) -> torch.Tensor:
         """Plan (N, num_drones, num_nodes, 12) -> the action term's (N, num_drones * 12):
-        node 1's p, v, a with zeros after."""
-        node1 = plan[:, :, 1]
-        action = torch.cat([node1[..., :9], torch.zeros_like(node1[..., 9:])], dim=-1)
-        return action.flatten(1)
+        node 1's p, v, a, w; w is the body-rate reference, world frame."""
+        return plan[:, :, 1].flatten(1)

@@ -9,8 +9,9 @@ Torch only -- nothing here needs the simulator, so training runs without it.
 """
 
 from .features import LABEL_FRAME, PER_DRONE_TERMS, PLAN_DIM, SHARED_TERMS, FeatureSpec
-from .model import BCPolicy, PINPolicy, load_checkpoint, save_checkpoint
+from .model import BCPolicy, PINPolicy, build_model, load_checkpoint, save_checkpoint
 from .student import StudentPolicy
+from .training_utils import bc_loss, load_episodes
 
 __all__ = [
     "LABEL_FRAME",
@@ -20,6 +21,9 @@ __all__ = [
     "BCPolicy",
     "PINPolicy",
     "FeatureSpec",
+    "bc_loss",
+    "build_model",
+    "load_episodes",
     "load_checkpoint",
     "save_checkpoint",
     "StudentPolicy",

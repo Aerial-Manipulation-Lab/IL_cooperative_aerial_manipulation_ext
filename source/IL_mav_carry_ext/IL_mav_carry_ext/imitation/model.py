@@ -3,8 +3,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The behaviour-cloning students, each with its normalisation built in: an MLP
-and a physics-informed TCN + FCN."""
+"""The behaviour-cloning students: an MLP and a physics-informed TCN + FCN.
+
+Both take and give physical units, unnormalised, as the thesis trains them."""
 
 import torch
 from torch import nn
@@ -13,7 +14,7 @@ from .features import LABEL_FRAME, PLAN_DIM, FeatureSpec
 
 
 class BCPolicy(nn.Module):
-    """Per-drone inputs -> that drone's plan label, both unnormalised."""
+    """Per-drone inputs -> that drone's plan label."""
 
     def __init__(self, input_dim: int, label_dim: int, hidden: tuple[int, ...] = (256, 256, 256)):
         super().__init__()
@@ -24,34 +25,14 @@ class BCPolicy(nn.Module):
             width = h
         layers.append(nn.Linear(width, label_dim))
         self.net = nn.Sequential(*layers)
-        self.register_buffer("in_mean", torch.zeros(input_dim))
-        self.register_buffer("in_std", torch.ones(input_dim))
-        self.register_buffer("out_mean", torch.zeros(label_dim))
-        self.register_buffer("out_std", torch.ones(label_dim))
 
-    def set_normalisation(self, inputs: torch.Tensor, labels: torch.Tensor):
-        """Per-dimension mean and std from the training set."""
-
-        def stats(x):
-            std = x.std(0)
-            return x.mean(0), torch.where(std > 1e-6, std, torch.ones_like(std))
-
-        self.in_mean, self.in_std = stats(inputs)
-        self.out_mean, self.out_std = stats(labels)
-
-    def normalise_inputs(self, inputs):
-        return (inputs - self.in_mean) / self.in_std
-
-    def normalise_labels(self, labels):
-        return (labels - self.out_mean) / self.out_std
-
-    def forward(self, inputs_normalised: torch.Tensor) -> torch.Tensor:
-        return self.net(inputs_normalised)
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.net(inputs)
 
     @torch.no_grad()
     def predict(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Raw inputs (..., input_dim) -> labels (..., label_dim) in physical units."""
-        return self.net(self.normalise_inputs(inputs)) * self.out_std + self.out_mean
+        """Inputs (..., input_dim) -> labels (..., label_dim)."""
+        return self.net(inputs)
 
 
 class PINPolicy(nn.Module):
@@ -112,46 +93,19 @@ class PINPolicy(nn.Module):
         layers.append(nn.Linear(width, 6))
         self.head = nn.Sequential(*layers)
 
-        self.register_buffer("in_mean", torch.zeros(input_dim))
-        self.register_buffer("in_std", torch.ones(input_dim))
-        self.register_buffer("out_mean", torch.zeros(label_dim))
-        self.register_buffer("out_std", torch.ones(label_dim))
-
     @classmethod
     def from_spec(cls, spec: FeatureSpec, hidden: tuple[int, ...] = (256, 256, 256)) -> "PINPolicy":
         ref, vel = spec.input_slice("payload_ref_horizon"), spec.input_slice("drone_linear_velocities")
         cols = [ref.start, ref.stop], [vel.start, vel.stop]
         return cls(spec.input_dim, spec.label_dim, *cols, spec.meta["node_offsets_s"], hidden)
 
-    def set_normalisation(self, inputs: torch.Tensor, labels: torch.Tensor):
-        """Inputs per dimension, labels per plan dimension pooled over the nodes.
-
-        The nodes are one curve, fitted as a whole, and node 0 is about the
-        state now: a per-node scale would weight its near-constant columns
-        without bound.
-        """
-
-        def stats(x):
-            std = x.std(0)
-            return x.mean(0), torch.where(std > 1e-6, std, torch.ones_like(std))
-
-        self.in_mean, self.in_std = stats(inputs)
-        mean, std = stats(labels.reshape(-1, PLAN_DIM))
-        self.out_mean, self.out_std = mean.repeat(self.num_nodes), std.repeat(self.num_nodes)
-
-    def normalise_inputs(self, inputs):
-        return (inputs - self.in_mean) / self.in_std
-
-    def normalise_labels(self, labels):
-        return (labels - self.out_mean) / self.out_std
-
-    def forward(self, inputs_normalised: torch.Tensor) -> torch.Tensor:
-        x = inputs_normalised.reshape(-1, inputs_normalised.shape[-1])
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        x = inputs.reshape(-1, inputs.shape[-1])
         n, k = len(x), self.num_nodes
         ref = x[:, self.ref].reshape(n, k, -1).transpose(1, 2)  # (n, per-node dim, nodes)
         rest = torch.cat([x[:, : self.ref.start], x[:, self.ref.stop :]], dim=-1)
         z = torch.cat([self.tcn(ref), self.fcn(rest)], dim=-1).repeat_interleave(k, 0)
-        v_now = (x[:, self.vel] * self.in_std[self.vel] + self.in_mean[self.vel]).repeat_interleave(k, 0)
+        v_now = x[:, self.vel].repeat_interleave(k, 0)
 
         # one row per (sample, node), and rows never mix: forward-mode AD with a
         # tangent of ones on t gives every row's d/dt in one pass, and nested, d2/dt2
@@ -166,17 +120,24 @@ class PINPolicy(nn.Module):
 
         # the label frame of `FeatureSpec.plan_to_label`: v relative to the drone's velocity now
         label = torch.cat([p, v - v_now, a, w], dim=-1)
-        return self.normalise_labels(label.reshape(*inputs_normalised.shape[:-1], k * PLAN_DIM))
+        return label.reshape(*inputs.shape[:-1], k * PLAN_DIM)
 
     def predict(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Raw inputs (..., input_dim) -> labels (..., label_dim) in physical units.
+        """Inputs (..., input_dim) -> labels (..., label_dim).
 
         Steps out of inference mode, which `play.py` flies under: forward-mode
         AD is off there, so v and a would silently come out as zero
         derivatives. The clone makes the inputs usable outside it.
         """
         with torch.inference_mode(False), torch.no_grad():
-            return self(self.normalise_inputs(inputs.clone())) * self.out_std + self.out_mean
+            return self(inputs.clone())
+
+
+def build_model(spec: FeatureSpec, name: str) -> BCPolicy | PINPolicy:
+    """An untrained student, "pin" or "mlp"; the one place train.py and dagger.py get it from."""
+    if name == "mlp":
+        return BCPolicy(spec.input_dim, spec.label_dim, hidden=(256, 256, 256))
+    return PINPolicy.from_spec(spec, hidden=(256, 256, 256))
 
 
 def save_checkpoint(path, model: BCPolicy | PINPolicy, spec: FeatureSpec, **extra):

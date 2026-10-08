@@ -40,10 +40,21 @@ FLYCRANE_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.0),
+        # the MPC's hover equilibrium for FLYCRANE_SIM: cables along its allocator's directions,
+        # each drone tilted to balance its cable's pull; through the URDF joint chain
         joint_pos={
-            "rope_1_sphere_joint_0_joint_x": 0.5,
-            "rope_2_sphere_joint_0_joint_x": -0.5,
-            "rope_3_sphere_joint_0_joint_y": 0.5,
+            "rope_1_sphere_joint_0_joint_x": 0.6186,
+            "rope_1_sphere_joint_0_joint_y": 0.2452,
+            "rope_1_sphere_joint_7_joint_x": 0.2385,
+            "rope_1_sphere_joint_7_joint_y": -0.1421,
+            "rope_1_sphere_joint_7_joint_z": 0.0577,
+            "rope_2_sphere_joint_0_joint_x": -0.6186,
+            "rope_2_sphere_joint_0_joint_y": 0.2452,
+            "rope_2_sphere_joint_7_joint_x": -0.2385,
+            "rope_2_sphere_joint_7_joint_y": -0.1421,
+            "rope_2_sphere_joint_7_joint_z": -0.0577,
+            "rope_3_sphere_joint_0_joint_y": 0.7366,
+            "rope_3_sphere_joint_7_joint_y": 0.1210,
         },
         joint_vel={
             ".*": 0.0,

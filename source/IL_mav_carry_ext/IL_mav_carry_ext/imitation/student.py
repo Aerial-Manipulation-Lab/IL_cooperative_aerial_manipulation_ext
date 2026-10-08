@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Checkpoint-loaded student policy: raw policy obs -> action term's action."""
+"""Student policy: raw policy obs -> action term's action."""
 
 import torch
 
@@ -11,15 +11,20 @@ from .model import load_checkpoint
 
 
 class StudentPolicy:
-    """Flies the checkpoint: maps the policy obs to the action term's action."""
+    """Flies a student network, trained or still training."""
 
-    def __init__(self, path, device):
-        self.model, self.spec, checkpoint = load_checkpoint(path, device=device)
-        print(
-            f"[INFO]: student from {path} (epoch {checkpoint['epoch']}, "
-            f"val node-1 pos {checkpoint['metrics']['val/node1_pos_cm']:.2f} cm)"
-        )
+    def __init__(self, model, spec):
+        self.model, self.spec = model, spec
+
+    @classmethod
+    def load(cls, path, device):
+        model, spec, _ = load_checkpoint(path, device=device)
+        print(f"[INFO]: student from {path}")
+        return cls(model, spec)
 
     def __call__(self, obs: torch.Tensor) -> torch.Tensor:
-        label = self.model.predict(self.spec.build_inputs(obs))
-        return self.spec.plan_to_action(self.spec.label_to_plan(label, obs))
+        return self.spec.plan_to_action(self.plan(obs))
+
+    def plan(self, obs: torch.Tensor) -> torch.Tensor:
+        """Each drone's whole plan, (N, num_drones, num_nodes, 12), env frame like the teacher's."""
+        return self.spec.label_to_plan(self.model.predict(self.spec.build_inputs(obs)), obs)

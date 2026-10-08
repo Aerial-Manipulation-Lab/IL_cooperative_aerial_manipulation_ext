@@ -22,7 +22,7 @@ ignore = [
 
 [lint.per-file-ignores]
 "**/__init__.py" = ["F401", "F403"]
-"**/mdp_llc/*.py" = ["F403", "F405"]
+"**/mdp/*.py" = ["F403", "F405"]
 # Isaac Lab scripts must launch the simulator (AppLauncher) before importing the rest
 "scripts/**" = ["E402", "E501"]
 # @configclass reads class attributes off the class; ClassVar annotations would hide them

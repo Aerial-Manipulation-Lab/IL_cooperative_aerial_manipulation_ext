@@ -1,6 +1,5 @@
 import torch
 from isaaclab.utils.math import (
-    matrix_from_quat,
     normalize,
     quat_apply,
     quat_from_matrix,
@@ -42,7 +41,7 @@ class GeometricController:
         self.falcon_mass = 0.6017  # kg
         self._epsilon = torch.tensor(1e-6, device=self.device)  # avoid division by zero
 
-        # controller parameters
+        # controller parameters, as Agilicious' geo_mdcm.yaml (the flycrane pilot of the thesis's Gazebo runs)
         self.kp_acc = torch.tensor([4.0, 4.0, 9.0], device=self.device)
         self.kd_acc = torch.tensor([4.0, 4.0, 6.0], device=self.device)
         self.ki_acc = torch.tensor([0.0, 0.0, 0.0], device=self.device)
@@ -141,7 +140,6 @@ class GeometricController:
         # the world up axis, i.e. hold a level attitude when no acceleration is commanded.
         degenerate = z_b_des.norm(dim=-1, keepdim=True) < 0.5
         z_b_des = torch.where(degenerate, torch.tensor([0.0, 0.0, 1.0], device=z_b_des.device), z_b_des)
-        current_collective_thrust_magnitude = torch.norm(current_collective_thrust, dim=1, keepdim=True)
 
         # attitude command
         # Calculate the desired quaternion
@@ -157,21 +155,9 @@ class GeometricController:
         des_rot_matrix = torch.stack([x_b_des, y_b_des, z_b_des], dim=2)
         q_cmd = quat_from_matrix(des_rot_matrix)
         # angular velocity command
-        # retrieve the current body axes of the drone
         if self.control_mode == "geometric":
-            current_rot_matrix = matrix_from_quat(state["quat"])
-            x_b = current_rot_matrix[..., 0]
-            y_b = current_rot_matrix[..., 1]
-            z_b = current_rot_matrix[..., 2]
-
-            T_dot = self.falcon_mass * torch.sum(setpoint["jerk"] * z_b, dim=-1, keepdim=True)
-            h_omega = self.falcon_mass * setpoint["jerk"] - T_dot * z_b  # rotational derivative of z_b
-            mask = (current_collective_thrust_magnitude > 0.01).squeeze()  # avoid division by zero
-            h_omega[mask] /= current_collective_thrust_magnitude[mask]
-            omega_b_x = (-h_omega * y_b).sum(-1, keepdim=True)
-            omega_b_y = (h_omega * x_b).sum(-1, keepdim=True)
-            omega_b_z = setpoint["yaw_rate"] * (self.z_i * z_b).sum(-1, keepdim=True)
-            omega_b_ref = torch.cat((omega_b_x, omega_b_y, omega_b_z), dim=-1)
+            # the planned body rate, world frame, as Agilicious' use_bodyrate_ref
+            omega_b_ref = quat_apply(quat_inv(state["quat"]), setpoint["body_rates"])
         elif self.control_mode == "ACCBR":
             omega_b_ref = setpoint["body_rates"]
 

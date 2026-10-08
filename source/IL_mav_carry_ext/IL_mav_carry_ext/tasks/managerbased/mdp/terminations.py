@@ -249,20 +249,6 @@ def payload_target_distance(
     return is_target_far
 
 
-def goal_reached_termination(
-    env: ManagerBasedRLEnv,
-    command_name: str,
-) -> torch.Tensor:
-    goal_reached = env.command_manager._terms[command_name].achieved_goal
-
-    assert goal_reached.shape == (env.num_envs,)
-    return goal_reached
-
-
-def sim_time_exceed(env: ManagerBasedRLEnv, command_name: str = "pose_twist_command") -> torch.Tensor:
-    """Terminate when the simulation time exceeds the threshold (end of reference trajectory)."""
-    command_term = env.command_manager._terms[command_name]
-    is_sim_time_exceeded = command_term.sim_time > command_term.reference[0, -1, 0]
-
-    assert is_sim_time_exceeded.shape == (env.num_envs,)
-    return is_sim_time_exceeded
+def mpc_failed(env: ManagerBasedRLEnv, command_name: str = "pose_command") -> torch.Tensor:
+    """Terminate when the MPC teacher's last solve failed: its setpoints and warm start are not trustworthy."""
+    return ~env.command_manager.get_term(command_name).teacher.ok

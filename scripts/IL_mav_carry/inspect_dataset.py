@@ -10,10 +10,9 @@ Reports what the dataset holds and fails (exit code 1) if its parts disagree:
   - episodes: count, success rate, lengths
   - solver health: fraction of steps whose solve succeeded
   - shapes against the `.meta.json` next to the dataset
-  - consistency: the recorded action is node 1 of the recorded plan, and
-    matches the executed action wherever the teacher flew
+  - consistency: the executed action is node 1 of the recorded plan
   - label statistics per component, and no NaNs
-  - how close to the goal the payload gets over an episode, from the obs
+  - how closely the payload tracks its reference over an episode, from the obs
 
 Example, from the repo root:
 
@@ -56,14 +55,14 @@ class Checks:
 
 
 def sweep(f, slices, obs_dim, num_drones, num_nodes):
-    """Per-episode arrays, the check flags, label rows, and goal errors of one file."""
+    """Per-episode arrays, the check flags, label rows, and reference errors of one file."""
     demos = sorted(f["data"].keys(), key=lambda name: int(name.split("_")[1]))
     if not demos:
         raise SystemExit(f"[ERROR]: no episodes in {f.filename}")
 
-    lengths, successes, ok_steps, goal_err = [], [], [], []
+    lengths, successes, ok_steps, ref_err = [], [], [], []
     label_parts = {name: [] for name in LABEL_PARTS}
-    flags = {"shapes_ok": True, "has_nan": False, "consistent": True, "executed_matches": True}
+    flags = {"shapes_ok": True, "has_nan": False, "consistent": True}
 
     for name in demos:
         ep = f["data"][name]
@@ -71,10 +70,8 @@ def sweep(f, slices, obs_dim, num_drones, num_nodes):
         success = bool(ep.attrs.get("success", False))
         obs = ep["obs"][()]
         horizon = ep["teacher_horizon"][()]
-        teacher_action = ep["teacher_action"][()]
         actions = ep["actions"][()]
         mpc_ok = ep["mpc_ok"][()].astype(bool)
-        executed = ep["teacher_executed"][()].astype(bool)
 
         lengths.append(n)
         successes.append(success)
@@ -82,22 +79,20 @@ def sweep(f, slices, obs_dim, num_drones, num_nodes):
         flags["shapes_ok"] &= (
             obs.shape == (n, obs_dim)
             and horizon.shape == (n, num_drones, num_nodes, 12)
-            and teacher_action.shape == actions.shape == (n, num_drones * 12)
-            and mpc_ok.shape == executed.shape == (n,)
+            and actions.shape == (n, num_drones * 12)
+            and mpc_ok.shape == (n,)
         )
         flags["has_nan"] |= bool(np.isnan(obs).any() or np.isnan(horizon).any())
 
-        per_drone = teacher_action.reshape(n, num_drones, 12)
-        flags["consistent"] &= np.allclose(per_drone[..., :9], horizon[:, :, 1, :9], atol=1e-5)
-        flags["consistent"] &= np.all(per_drone[..., 9:] == 0)
-        flags["executed_matches"] &= np.allclose(actions[executed], teacher_action[executed], atol=1e-5)
+        per_drone = actions.reshape(n, num_drones, 12)
+        flags["consistent"] &= np.allclose(per_drone, horizon[:, :, 1], atol=1e-5)
 
         for part, cols in LABEL_PARTS.items():
             label_parts[part].append(horizon[mpc_ok][..., cols].reshape(-1, 3))
         if success and "payload_positional_error" in slices:
-            goal_err.append(obs[:, slices["payload_positional_error"]])
+            ref_err.append(obs[:, slices["payload_positional_error"]])
 
-    return demos, lengths, successes, ok_steps, flags, label_parts, goal_err
+    return demos, lengths, successes, ok_steps, flags, label_parts, ref_err
 
 
 def print_report(check, stem, meta, obs_dim, demos, lengths, successes, ok_steps, flags, label_parts):
@@ -123,8 +118,7 @@ def print_report(check, stem, meta, obs_dim, demos, lengths, successes, ok_steps
     print("\nchecks")
     check(flags["shapes_ok"], f"shapes match meta: obs (n, {obs_dim}), horizon (n, {D}, {K}, 12), action (n, {D * 12})")
     check(not flags["has_nan"], "no NaNs in obs or labels")
-    check(flags["consistent"], "teacher_action is node 1 of teacher_horizon (p, v, a) with zeros after")
-    check(flags["executed_matches"], "actions == teacher_action wherever the teacher flew")
+    check(flags["consistent"], "actions are node 1 of teacher_horizon (p, v, a, w)")
     check(all(lengths[successes] == full_len), f"successful episodes all run the full {full_len} steps")
 
     print("\nlabel statistics (all drones and nodes, successful solves)")
@@ -136,13 +130,13 @@ def print_report(check, stem, meta, obs_dim, demos, lengths, successes, ok_steps
         )
 
 
-def print_goal_error(goal_err, dt):
-    if not goal_err:
+def print_reference_error(ref_err, dt):
+    if not ref_err:
         return
-    common = min(len(e) for e in goal_err)
-    goal_err = np.stack([e[:common] for e in goal_err])  # (episodes, steps, 3), goal - payload
-    err = np.linalg.norm(goal_err, axis=-1) * 100
-    print("\ngoal error over the episode, successful episodes (ramp ends at 3 s)")
+    common = min(len(e) for e in ref_err)
+    ref_err = np.stack([e[:common] for e in ref_err])  # (episodes, steps, 3), reference now - payload
+    err = np.linalg.norm(ref_err, axis=-1) * 100
+    print("\nerror to the reference over the episode, successful episodes")
     for t in np.arange(0.0, common * dt, 1.0):
         k = min(round(t / dt), common - 1)
         e = err[:, k]
@@ -150,8 +144,8 @@ def print_goal_error(goal_err, dt):
     final = err[:, -1]
     print(f"  end    mean {final.mean():6.2f} cm  p90 {np.percentile(final, 90):6.2f} cm  max {final.max():6.2f} cm")
 
-    tail = goal_err[:, round(4 / dt) :] * 100  # settled: ramp done plus a second of settling
-    print("\ngoal error per axis [cm] (goal - payload), settled t>=4 s")
+    tail = ref_err[:, round(4 / dt) :] * 100  # past the approach's 3 s ramp and a second of settling
+    print("\nerror to the reference per axis [cm] (reference - payload), t>=4 s")
     for i, axis in enumerate("xyz"):
         signed, mag = tail[..., i], np.abs(tail[..., i])
         print(
@@ -173,12 +167,12 @@ def main():
     check = Checks()
 
     with h5py.File(stem + ".hdf5", "r") as f:
-        demos, lengths, successes, ok_steps, flags, label_parts, goal_err = sweep(
+        demos, lengths, successes, ok_steps, flags, label_parts, ref_err = sweep(
             f, slices, obs_dim, meta["num_drones"], meta["num_nodes"]
         )
 
     print_report(check, stem, meta, obs_dim, demos, lengths, successes, ok_steps, flags, label_parts)
-    print_goal_error(goal_err, meta["step_dt"])
+    print_reference_error(ref_err, meta["step_dt"])
 
     if args.plot is not None:
         plot_episode(stem, meta, slices, args.plot)
@@ -190,7 +184,7 @@ def main():
 
 
 def plot_episode(stem, meta, slices, index):
-    """Payload path against its goal and reference, and drone 0's setpoint, for one episode."""
+    """Payload path against its reference, and drone 0's setpoint, for one episode."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -202,7 +196,6 @@ def plot_episode(stem, meta, slices, index):
         horizon = ep["teacher_horizon"][()]
     t = np.arange(len(obs)) * meta["step_dt"]
     payload = obs[:, slices["payload_position"]]
-    goal = payload + obs[:, slices["payload_positional_error"]]
     ref = payload + obs[:, slices["payload_ref_horizon"]].reshape(len(obs), -1, 18)[:, 0, :3]
     drone0 = horizon[:, 0, 1, :3]
 
@@ -210,7 +203,6 @@ def plot_episode(stem, meta, slices, index):
     for i, (ax, axis) in enumerate(zip(axes, "xyz", strict=True)):
         ax.plot(t, payload[:, i], label="payload")
         ax.plot(t, ref[:, i], "--", label="reference (node 0)")
-        ax.plot(t, goal[:, i], ":", label="goal")
         ax.plot(t, drone0[:, i], alpha=0.6, label="drone 0 setpoint (node 1)")
         ax.set_ylabel(f"{axis} [m]")
     axes[0].legend(loc="best", fontsize=8)

@@ -17,10 +17,9 @@ import os
 import time
 from datetime import datetime
 
-import h5py
 import numpy as np
 import torch
-from IL_mav_carry_ext.imitation import PLAN_DIM, BCPolicy, FeatureSpec, PINPolicy, save_checkpoint
+from IL_mav_carry_ext.imitation import PLAN_DIM, bc_loss, build_model, load_episodes, save_checkpoint
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
@@ -31,51 +30,11 @@ parser.add_argument("--seed", type=int, default=0, help="Seed for the split and 
 parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--batch_size", type=int, default=4096)
 parser.add_argument("--lr", type=float, default=1e-3)
-parser.add_argument(
-    "--model", choices=["mlp", "pin"], default="mlp", help="BCPolicy (mlp) or the physics-informed PINPolicy (pin)."
-)
-parser.add_argument("--hidden", type=int, nargs="+", default=[256, 256, 256], help="Hidden layer widths.")
+parser.add_argument("--model", choices=["pin", "mlp"], default="pin", help="Student network, see build_model.")
 parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
 parser.add_argument("--log_dir", type=str, default="logs/bc")
 parser.add_argument("--run_name", type=str, default=None, help="Defaults to a timestamp.")
 args = parser.parse_args()
-
-
-def load_file(stem, spec):
-    """Usable (inputs, labels) episodes from one dataset file, as (steps, num_drones, dim) CPU tensors."""
-    episodes, skipped = [], 0
-    with h5py.File(stem + ".hdf5", "r") as f:
-        print(f"[INFO]: loading {len(f['data'])} episodes from {stem}.hdf5", flush=True)
-        for n, name in enumerate(f["data"], start=1):
-            if n % 50 == 0:
-                print(f"[INFO]:   {n}/{len(f['data'])} episodes", flush=True)
-            ep = f["data"][name]
-            if not bool(ep.attrs.get("success", False)):
-                skipped += 1
-                continue
-            ok = ep["mpc_ok"][()].astype(bool)
-            obs = torch.as_tensor(ep["obs"][()][ok], dtype=torch.float32)
-            plan = torch.as_tensor(ep["teacher_horizon"][()][ok], dtype=torch.float32)
-            episodes.append((spec.build_inputs(obs), spec.plan_to_label(plan, obs)))
-    return episodes, skipped
-
-
-def load_episodes(paths):
-    """[(inputs, labels)] per usable episode over all files, and the shared spec."""
-    spec, episodes, skipped = None, [], 0
-    for path in paths:
-        stem = os.path.splitext(path)[0]
-        with open(stem + ".meta.json") as f:
-            meta = json.load(f)
-        if spec is None:
-            spec = FeatureSpec(meta)
-        elif meta["obs_terms"] != spec.meta["obs_terms"]:
-            raise ValueError(f"{stem}: obs layout differs from {paths[0]}")
-        file_episodes, file_skipped = load_file(stem, spec)
-        episodes.extend(file_episodes)
-        skipped += file_skipped
-    print(f"[INFO]: {len(episodes)} episodes used, {skipped} unsuccessful skipped")
-    return episodes, spec
 
 
 def split(episodes, val_frac, seed):
@@ -95,14 +54,13 @@ def split(episodes, val_frac, seed):
 
 @torch.no_grad()
 def evaluate(model, x, y, spec, batch_size):
-    """Validation loss (normalised MSE) and errors in physical units."""
+    """Validation loss (MSE) and errors, in physical units."""
     loss, sq_err = 0.0, torch.zeros(spec.num_nodes, PLAN_DIM, device=x.device)
     for i in range(0, len(x), batch_size):
         xb, yb = x[i : i + batch_size], y[i : i + batch_size]
-        pred = model(model.normalise_inputs(xb))
-        loss += torch.nn.functional.mse_loss(pred, model.normalise_labels(yb), reduction="sum").item()
-        pred_phys = pred * model.out_std + model.out_mean
-        sq_err += ((pred_phys - yb) ** 2).reshape(-1, spec.num_nodes, PLAN_DIM).sum(0)
+        pred = model(xb)
+        loss += torch.nn.functional.mse_loss(pred, yb, reduction="sum").item()
+        sq_err += ((pred - yb) ** 2).reshape(-1, spec.num_nodes, PLAN_DIM).sum(0)
     rmse = (sq_err / len(x)).sqrt()
 
     def vec(node, part):
@@ -135,11 +93,7 @@ def main():
     )
 
     loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
-    if args.model == "pin":
-        model = PINPolicy.from_spec(spec, tuple(args.hidden)).to(args.device)
-    else:
-        model = BCPolicy(spec.input_dim, spec.label_dim, tuple(args.hidden)).to(args.device)
-    model.set_normalisation(x_train, y_train)
+    model = build_model(spec, args.model).to(args.device)
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.5, patience=5)
 
@@ -155,8 +109,7 @@ def main():
         model.train()
         train_loss = 0.0
         for xb, yb in loader:
-            pred = model(model.normalise_inputs(xb))
-            loss = torch.nn.functional.mse_loss(pred, model.normalise_labels(yb))
+            loss = bc_loss(model, xb, yb)
             optimiser.zero_grad()
             loss.backward()
             optimiser.step()
