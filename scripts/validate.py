@@ -16,6 +16,7 @@ Example, from the repo root:
 """
 
 import argparse
+import time
 
 from isaaclab.app import AppLauncher
 
@@ -78,7 +79,7 @@ def main():
         done, completed = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
 
         obs, _ = env.reset()
-        step = 0
+        step, step_ms = 0, []
         while simulation_app.is_running() and not done.all():
             state = teacher.robot.data.body_com_state_w.torch.cpu().numpy()
             drones = state[:, teacher.falcon_idx, :3]
@@ -95,7 +96,14 @@ def main():
                     samples[i] += 1
 
             with torch.inference_mode():
-                action = teacher.action if student is None else student(obs["policy"])
+                if student is None:
+                    action = teacher.action
+                else:
+                    start = time.perf_counter()
+                    action = student(obs["policy"])
+                    if action.is_cuda:
+                        torch.cuda.synchronize()
+                    step_ms.append(1e3 * (time.perf_counter() - start))
                 obs, _, terminated, truncated, _ = env.step(action)
             step += 1
 
@@ -118,6 +126,7 @@ def main():
         results.append(
             f"[RESULT] {task}: {int(c.sum())}/{n} completed | position RMSE {pos[c].mean():.3f} m | "
             f"attitude RMSE {ang[c].mean():.2f} deg (means over completed flights) | closest drones {closest.min():.2f} m"
+            + (f" | inference {np.median(step_ms):.1f} ms per step" if step_ms else "")
         )
         print(results[-1], flush=True)
 

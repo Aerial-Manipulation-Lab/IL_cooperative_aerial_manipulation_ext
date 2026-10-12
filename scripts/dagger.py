@@ -193,6 +193,7 @@ def main():
     # cut each env's first episode short by a different 1/num_envs, so from then on they fly
     # different parts of it and every round holds the whole episode once
     env.episode_length_buf[:] = torch.arange(num_envs, device=env.device) * int(env.max_episode_length) // num_envs
+    run_start = time.time()
     for rnd in range(start, args_cli.iterations):
         if not simulation_app.is_running():
             break
@@ -260,6 +261,7 @@ def main():
             "failed_solves": failed,
             "loss": loss_sum / (args_cli.epochs * buffer.n),
             "buffer": buffer.n,
+            "total_min": (time.time() - run_start) / 60,
             **{f"ended_by/{name}": count for name, count in ended_by.items()},
         }
         for key, value in metrics.items():
@@ -269,7 +271,7 @@ def main():
             f"err vel {metrics['vel_err_mps']:.3f} m/s "
             f"acc {metrics['acc_err_mps2']:.3f} m/s2 | new loss {new_loss:.3f} loss {metrics['loss']:.3f} | "
             f"success {timeouts} | ended early {ended_early} | failed solves {failed} | "
-            f"buffer {buffer.n} | {(time.time() - round_start) / 60:.1f} min | ended by "
+            f"buffer {buffer.n} | {(time.time() - round_start) / 60:.1f} min, total {metrics['total_min']:.1f} min | ended by "
             + (", ".join(f"{name} {count}" for name, count in ended_by.items() if count) or "-"),
             flush=True,
         )
