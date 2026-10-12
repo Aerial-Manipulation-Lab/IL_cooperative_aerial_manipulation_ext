@@ -261,8 +261,9 @@ def payload_ref_horizon(
 
     Per shooting node, as the thesis's student sees it (its `PINN_FE` before the time column):
     position offset from the payload now (3, env frame), velocity (3), acceleration (3), body rate (3),
-    angular acceleration (3), and the attitude as rot6d (6): the first two rows of its rotation
-    matrix, pytorch3d's convention. Shape (num_envs, num_nodes * 21), node-major.
+    angular acceleration (3), and the attitude still to go as rot6d (6): the first two rows of
+    R_payload^T R_ref, pytorch3d's convention. Not the thesis's absolute attitude: a student given that
+    turns out blind to a heading error. Shape (num_envs, num_nodes * 21), node-major.
 
     Samples come from `LoadTrajectory.window`, the same lookup the MPC's reference sampler uses, at
     the same clock (`common_step_counter * step_dt`) the teacher solves at.
@@ -280,8 +281,10 @@ def payload_ref_horizon(
         return torch.as_tensor(np.stack([getattr(w, name) for w in windows]), dtype=torch.float32, device=env.device)
 
     robot: Articulation = env.scene[asset_cfg.name]
-    payload_pos_env = robot.data.body_com_state_w.torch[:, payload_idx[0], :3] - env.scene.env_origins
-    rot6d = matrix_from_quat(stack("q"))[..., :2, :].flatten(-2)
+    payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
+    payload_pos_env = payload[:, :3] - env.scene.env_origins
+    rot_rel = matrix_from_quat(payload[:, None, 3:7]).transpose(-1, -2) @ matrix_from_quat(stack("q"))
+    rot6d = rot_rel[..., :2, :].flatten(-2)
     ref = torch.cat(
         [stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), stack("w"), stack("alpha"), rot6d], -1
     )

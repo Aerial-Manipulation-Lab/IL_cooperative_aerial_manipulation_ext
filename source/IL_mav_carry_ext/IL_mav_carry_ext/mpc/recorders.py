@@ -129,7 +129,7 @@ def dataset_metadata(env) -> dict:
         ],
         "obs_history_layout": "a term with history_length H holds H samples, oldest first, one per env step",
         "obs_per_drone_terms": "terms named drone_* are drone-major blocks, one per drone",
-        "payload_ref_horizon_layout": "per node: dp(3), v(3), a(3), w(3), alpha(3), rot6d rows(6)",
+        "payload_ref_horizon_layout": "per node: dp(3), v(3), a(3), w(3), alpha(3), rot6d rows of R_payload^T R_ref(6)",
         "teacher_horizon_layout": "(num_drones, num_nodes, 12): p(3), v(3), a(3), w(3), env frame",
         "action_layout": "per drone: p(3), v(3), a(3), w(3) body-rate reference in the world frame",
         "num_drones": teacher.num_drones,
