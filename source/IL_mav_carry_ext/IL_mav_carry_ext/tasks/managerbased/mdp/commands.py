@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-import python_mpc_cusadi
 import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
@@ -31,8 +30,8 @@ from ....mpc.teacher import MpcTeacher
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-REFERENCE_DATA = Path(python_mpc_cusadi.__file__).parents[2] / "data"
-"""Where the reference trajectories live, in python_mpc_cusadi."""
+REFERENCE_DATA = Path(__file__).parents[6] / "validation_data"
+"""Where the fixed reference trajectories live: the extension's validation_data."""
 
 
 class MpcCommand(CommandTerm):
