@@ -3,144 +3,134 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The behaviour-cloning students: an MLP and a physics-informed TCN + FCN.
+"""The thesis's student (section 4.3, its `pinn_model.PINN_FE`), with a PINN or a plain MLP decoder.
 
-Both take and give physical units, unnormalised, as the thesis trains them."""
+Four TCN encoders, one per input stream of `FeatureSpec`, each to a 64-wide latent; the decoder maps
+(latent, t) to the drone's plan at the node time t. The PINN decoder gives position and body rate, and
+velocity and acceleration as the position's time derivatives; the MLP decoder (the thesis's baseline in
+6.3) gives all four directly. Both take and give physical units, unnormalised, with position, velocity
+and acceleration scaled by POSITION_SCALE at the output, as in the thesis.
+"""
+
+import itertools
 
 import torch
+from pytorch_tcn import TCN
 from torch import nn
 
-from .features import LABEL_FRAME, PLAN_DIM, FeatureSpec
+from .features import PLAN_DIM, FeatureSpec
+
+POSITION_SCALE = 3.0
+"""The thesis's output scale on position, velocity and acceleration."""
 
 
-class BCPolicy(nn.Module):
-    """Per-drone inputs -> that drone's plan label."""
+class ScaledTanh(nn.Module):
+    """tanh(x) + alpha x tanh(x) with one trainable alpha per layer, the thesis's (after Stan)."""
 
-    def __init__(self, input_dim: int, label_dim: int, hidden: tuple[int, ...] = (256, 256, 256)):
+    def __init__(self, alpha: float = 1.0):
         super().__init__()
-        self.cfg = {"input_dim": input_dim, "label_dim": label_dim, "hidden": list(hidden)}
-        layers, width = [], input_dim
-        for h in hidden:
-            layers += [nn.Linear(width, h), nn.ELU()]
-            width = h
-        layers.append(nn.Linear(width, label_dim))
-        self.net = nn.Sequential(*layers)
+        self.alpha = nn.Parameter(torch.tensor(alpha))
 
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.net(inputs)
-
-    @torch.no_grad()
-    def predict(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Inputs (..., input_dim) -> labels (..., label_dim)."""
-        return self.net(inputs)
+    def forward(self, x):
+        return torch.tanh(x) + self.alpha * x * torch.tanh(x)
 
 
-class PINPolicy(nn.Module):
-    """Per-drone inputs -> that drone's plan label, physics-informed; same interface as `BCPolicy`.
-
-    After `PINN_FE` in the Imitation_learning repo: a TCN over the reference
-    horizon and an FCN over the rest of the input make a latent, and an MLP of
-    (latent, t) gives the drone's position offset and body rate t seconds
-    ahead. Velocity and acceleration are that position's first and second time
-    derivatives, so every plan is kinematically consistent by construction.
-    """
+class ThesisPolicy(nn.Module):
+    """Per-drone inputs -> that drone's plan label."""
 
     def __init__(
         self,
-        input_dim: int,
-        label_dim: int,
-        ref_cols: list[int],
-        vel_cols: list[int],
+        streams: list,
         node_times: list[float],
-        hidden: tuple[int, ...] = (256, 256, 256),
-        channels: int = 64,
+        decoder: str,
+        label_frame: str,
+        channels: int = 256,
         latent: int = 64,
     ):
         super().__init__()
         self.cfg = {
-            "input_dim": input_dim,
-            "label_dim": label_dim,
-            "ref_cols": list(ref_cols),
-            "vel_cols": list(vel_cols),
+            "streams": [list(s) for s in streams],
             "node_times": list(node_times),
-            "hidden": list(hidden),
+            "decoder": decoder,
+            "label_frame": label_frame,
             "channels": channels,
             "latent": latent,
         }
-        self.ref, self.vel = slice(*ref_cols), slice(*vel_cols)
+        self.streams, self.decoder, self.label_frame = streams, decoder, label_frame
         self.num_nodes = len(node_times)
         self.register_buffer("node_times", torch.tensor(node_times, dtype=torch.float32), persistent=False)
-        ref_dim = ref_cols[1] - ref_cols[0]
-
-        # TCN over the reference horizon, its nodes as the time axis
-        self.tcn = nn.Sequential(
-            nn.Conv1d(ref_dim // self.num_nodes, channels, 3, padding=1),
-            nn.ELU(),
-            nn.Conv1d(channels, channels, 3, padding=2, dilation=2),
-            nn.ELU(),
-            nn.Flatten(),
-            nn.Linear(channels * self.num_nodes, latent),
-            nn.ELU(),
+        # pytorch-tcn's defaults otherwise, as the thesis used it: weight norm, dropout 0.1, causal, ReLU
+        self.encoders = nn.ModuleList(
+            nn.Sequential(
+                TCN(width, [channels, channels], 4 if name == "reference" else 8, input_shape="NLC"),
+                nn.Flatten(),
+                nn.Linear(channels * length, latent),
+                nn.ReLU(),
+            )
+            for name, length, width in streams
         )
-        # FCN over the rest: the state now and the attach point
-        self.fcn = nn.Sequential(nn.Linear(input_dim - ref_dim, 128), nn.ELU(), nn.Linear(128, latent), nn.ELU())
-        # (latent, t) -> p (3), w (3); Tanh, as a = d2p/dt2 needs a smooth net
-        # (SiLU is smooth too, but has no nested forward-mode AD in torch)
-        layers, width = [], 2 * latent + 1
-        for h in hidden:
-            layers += [nn.Linear(width, h), nn.Tanh()]
-            width = h
-        layers.append(nn.Linear(width, 6))
-        self.head = nn.Sequential(*layers)
-
-    @classmethod
-    def from_spec(cls, spec: FeatureSpec, hidden: tuple[int, ...] = (256, 256, 256)) -> "PINPolicy":
-        ref, vel = spec.input_slice("payload_ref_horizon"), spec.input_slice("drone_linear_velocities")
-        cols = [ref.start, ref.stop], [vel.start, vel.stop]
-        return cls(spec.input_dim, spec.label_dim, *cols, spec.meta["node_offsets_s"], hidden)
+        width_in = len(streams) * latent + 1
+        if decoder == "pin":
+            layers, widths = [], [width_in, 256, 256, 128, 128, 128]
+            for a, b in itertools.pairwise(widths):
+                layers += [nn.Linear(a, b), ScaledTanh()]
+            self.head = nn.Sequential(*layers, nn.Linear(128, 6))  # p, w
+        else:
+            layers, width = [], width_in
+            for _ in range(5):
+                layers += [nn.Linear(width, 128), nn.ReLU()]
+                width = 128
+            self.head = nn.Sequential(*layers, nn.Linear(128, PLAN_DIM))  # p, v, a, w
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         x = inputs.reshape(-1, inputs.shape[-1])
         n, k = len(x), self.num_nodes
-        ref = x[:, self.ref].reshape(n, k, -1).transpose(1, 2)  # (n, per-node dim, nodes)
-        rest = torch.cat([x[:, : self.ref.start], x[:, self.ref.stop :]], dim=-1)
-        z = torch.cat([self.tcn(ref), self.fcn(rest)], dim=-1).repeat_interleave(k, 0)
-        v_now = x[:, self.vel].repeat_interleave(k, 0)
-
-        # one row per (sample, node), and rows never mix: forward-mode AD with a
-        # tangent of ones on t gives every row's d/dt in one pass, and nested, d2/dt2
+        parts = x.split([length * width for _, length, width in self.streams], dim=-1)
+        latents = [
+            encoder(part.reshape(n, length, width))
+            for encoder, part, (_, length, width) in zip(self.encoders, parts, self.streams, strict=True)
+        ]
+        z = torch.cat(latents, dim=-1).repeat_interleave(k, 0)
         t = self.node_times.repeat(n)[:, None]
-        ones = torch.ones_like(t)
 
-        def head_and_rate(t):
-            return torch.func.jvp(lambda t: self.head(torch.cat([z, t], dim=-1)), (t,), (ones,))
+        if self.decoder == "pin":
+            # one row per (sample, node), and rows never mix: forward-mode AD with a tangent of ones on t
+            # gives every row's d/dt in one pass, and nested, d2/dt2
+            ones = torch.ones_like(t)
 
-        (out, d_out), (_, dd_out) = torch.func.jvp(head_and_rate, (t,), (ones,))
-        p, w, v, a = out[:, :3], out[:, 3:], d_out[:, :3], dd_out[:, :3]
+            def head_and_rate(t):
+                return torch.func.jvp(lambda t: self.head(torch.cat([z, t], dim=-1)), (t,), (ones,))
 
-        # the label frame of `FeatureSpec.plan_to_label`: v relative to the drone's velocity now
-        label = torch.cat([p, v - v_now, a, w], dim=-1)
+            (out, d_out), (_, dd_out) = torch.func.jvp(head_and_rate, (t,), (ones,))
+            p_v_a = torch.cat([out[:, :3], d_out[:, :3], dd_out[:, :3]], -1)
+            label = torch.cat([POSITION_SCALE * p_v_a, out[:, 3:]], -1)
+            if self.label_frame == "drone":
+                # its label's velocity is relative to the drone's now: the newest sample of the drone stream
+                _, length, width = self.streams[1]
+                v_now = parts[1].reshape(n, length, width)[:, -1, 4:7]
+                label = torch.cat([label[:, :3], label[:, 3:6] - v_now.repeat_interleave(k, 0), label[:, 6:]], -1)
+        else:
+            out = self.head(torch.cat([z, t], dim=-1))
+            label = torch.cat([POSITION_SCALE * out[:, :9], out[:, 9:]], -1)
         return label.reshape(*inputs.shape[:-1], k * PLAN_DIM)
 
     def predict(self, inputs: torch.Tensor) -> torch.Tensor:
         """Inputs (..., input_dim) -> labels (..., label_dim).
 
-        Steps out of inference mode, which `play.py` flies under: forward-mode
-        AD is off there, so v and a would silently come out as zero
-        derivatives. The clone makes the inputs usable outside it.
+        Steps out of inference mode, which `play.py` flies under: forward-mode AD is off there, so the
+        PINN's v and a would silently come out as zero derivatives. The clone makes the inputs usable
+        outside it.
         """
         with torch.inference_mode(False), torch.no_grad():
             return self(inputs.clone())
 
 
-def build_model(spec: FeatureSpec, name: str) -> BCPolicy | PINPolicy:
-    """An untrained student, "pin" or "mlp"; the one place train.py and dagger.py get it from."""
-    if name == "mlp":
-        return BCPolicy(spec.input_dim, spec.label_dim, hidden=(256, 256, 256))
-    return PINPolicy.from_spec(spec, hidden=(256, 256, 256))
+def build_model(spec: FeatureSpec, name: str) -> ThesisPolicy:
+    """An untrained student with a "pin" or "mlp" decoder; the one place train.py and dagger.py get it from."""
+    return ThesisPolicy(spec.streams, spec.meta["node_offsets_s"], name, spec.label_frame)
 
 
-def save_checkpoint(path, model: BCPolicy | PINPolicy, spec: FeatureSpec, **extra):
+def save_checkpoint(path, model: ThesisPolicy, spec: FeatureSpec, **extra):
     """Everything needed to fly the student without the training script."""
     torch.save(
         {
@@ -148,27 +138,17 @@ def save_checkpoint(path, model: BCPolicy | PINPolicy, spec: FeatureSpec, **extr
             "model_cfg": model.cfg,
             "state_dict": model.state_dict(),
             "meta": spec.meta,
-            "label_frame": LABEL_FRAME,
+            "label_frame": spec.label_frame,
             **extra,
         },
         path,
     )
 
 
-def load_checkpoint(path, device="cpu") -> tuple[BCPolicy | PINPolicy, FeatureSpec, dict]:
+def load_checkpoint(path, device="cpu") -> tuple[ThesisPolicy, FeatureSpec, dict]:
     """(model, feature spec, the whole checkpoint dict) from `save_checkpoint`."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    frame = ckpt.get("label_frame", "payload")
-    if frame != LABEL_FRAME:
-        raise ValueError(
-            f"{path} was trained with {frame}-relative labels, this code decodes "
-            f"{LABEL_FRAME}-relative ones; retrain it"
-        )
-    cfg = ckpt["model_cfg"]
-    if ckpt.get("model") == "PINPolicy":
-        model = PINPolicy(**cfg).to(device)
-    else:
-        model = BCPolicy(cfg["input_dim"], cfg["label_dim"], tuple(cfg["hidden"])).to(device)
+    model = ThesisPolicy(**ckpt["model_cfg"]).to(device)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-    return model, FeatureSpec(ckpt["meta"]), ckpt
+    return model, FeatureSpec(ckpt["meta"], ckpt["label_frame"]), ckpt

@@ -9,9 +9,13 @@ A round is ROUND_FLIGHT_S of flight over all envs together, as much as one episo
 DAgger; the envs carry on across rounds and restart only when their episode ends, staggered so that
 each round's flight covers the whole episode once (from round num_envs - 1 on). Per env and step
 the student flies if the beta coin says so and its whole plan is within GATE of the teacher's, else
-the teacher does; every state is labelled with the teacher's plan. Beta is 1 in round 0, which makes
-it behaviour cloning, and 0 from then on, so the gate alone decides: the simplest DAgger (Ross et al.).
-Every `--keep_every`-th step goes into the training buffer (steps 10 ms apart are near copies).
+the teacher does; every state is labelled with the teacher's plan. `--schedule thesis` is the thesis
+code's (`custom_dagger_implementation.py`): for the first half of the rounds beta falls linearly from 1
+to 0, then the gate alone decides, its threshold rising from 0.01 to 0.03 (the thesis's units, rescaled
+like GATE), and the payload is pushed as in the thesis (`DirectedLoadPush`). `--schedule pure` has beta 1
+in round 0, which makes it behaviour cloning, and 0 from then on: the simplest DAgger (Ross et al.).
+Every `--keep_every`-th step goes into the training buffer (steps 10 ms apart are near copies), except in
+an episode's first SKIP_START_S, as the thesis.
 After each round the student trains `--epochs` passes over the buffer.
 
 Episodes are recorded to <run dir>/rollouts_<first round>.hdf5. Running the same command again
@@ -40,6 +44,10 @@ parser.add_argument("--iterations", type=int, default=25, help="Rounds of ROUND_
 parser.add_argument("--num_envs", type=int, default=8, help="Flycranes flying in parallel.")
 parser.add_argument("--epochs", type=int, default=16, help="Passes over every example so far, per round.")
 parser.add_argument("--keep_every", type=int, default=10, help="Train on every Nth step; the recording keeps all.")
+parser.add_argument("--schedule", choices=["thesis", "pure"], default="thesis", help="Who flies when; see above.")
+parser.add_argument(
+    "--label_frame", choices=["payload", "drone"], default="payload", help="What the labels are relative to."
+)
 parser.add_argument(
     "--model",
     choices=["pin", "mlp"],
@@ -62,6 +70,7 @@ import math
 import os
 import time
 
+import numpy as np
 import torch
 from IL_mav_carry_ext.imitation import (
     FeatureSpec,
@@ -80,6 +89,21 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 LR = 1e-3
 GATE = 0.03  # the thesis's 0.02 MSE over 20 state columns per node, rescaled to our 12
+SKIP_START_S = 2.0  # the thesis keeps no data from an episode's first 20 steps of 0.1 s
+PUSH_FORCE, PUSH_TORQUE = 6.0, 0.1  # N, Nm: the thesis code's pushes in its second half
+
+
+def schedule(rnd: int) -> tuple[float, float, bool]:
+    """(beta, gate, whether the payload is pushed) in round rnd."""
+    if args_cli.schedule == "pure":
+        return (1.0 if rnd == 0 else 0.0), GATE, False
+    half = args_cli.iterations // 2
+    if rnd < half:
+        return float(np.linspace(1.0, 0.0, half)[rnd]), GATE, False
+    threshold = float(np.linspace(0.01, 0.03, args_cli.iterations - half)[rnd - half])
+    return 0.0, threshold * GATE / 0.02, True
+
+
 ROUND_FLIGHT_S = 40.0
 LOG_DIR = "logs/dagger"
 
@@ -137,7 +161,7 @@ def main():
         json.dump(meta, f, indent=2)
 
     if ckpt is None:
-        spec = FeatureSpec(meta)
+        spec = FeatureSpec(meta, args_cli.label_frame)
         model = build_model(spec, args_cli.model)
     elif spec.meta["obs_terms"] != meta["obs_terms"]:
         raise ValueError(f"{last} was trained on another obs layout than this env has")
@@ -148,7 +172,7 @@ def main():
     student = StudentPolicy(model, spec)
 
     keep = args_cli.keep_every
-    episodes = [(x[::keep], y[::keep]) for x, y in load_episodes(earlier)[0]] if earlier else []
+    episodes = [(x[::keep], y[::keep]) for x, y in load_episodes(earlier, spec.label_frame)[0]] if earlier else []
     num_envs, num_drones = env.num_envs, spec.num_drones
     steps = round(ROUND_FLIGHT_S / (num_envs * env.step_dt))
     capacity = sum(x.shape[0] * x.shape[1] for x, _ in episodes)
@@ -173,7 +197,11 @@ def main():
         if not simulation_app.is_running():
             break
         round_start = time.time()
-        beta = 1.0 if rnd == 0 else 0.0
+        beta, gate, pushed = schedule(rnd)
+        push = env.event_manager.get_term_cfg("push_load")
+        push.params.update(force=PUSH_FORCE if pushed else 0.0, torque=PUSH_TORQUE if pushed else 0.0)
+        env.event_manager.set_term_cfg("push_load", push)
+        model.eval()  # the TCNs' dropout off while flying
         vel_err = acc_err = err_n = failed = ended_early = timeouts = flown = 0
         ended_by = {}
         fresh = buffer.n
@@ -182,7 +210,8 @@ def main():
                 x, ok = obs["policy"], teacher.ok
                 failed += int((~ok).sum())
                 if step % keep == 0:
-                    buffer.add(spec.build_inputs(x[ok]), spec.plan_to_label(teacher.plan[ok], x[ok]))
+                    use = ok & (env.episode_length_buf >= round(SKIP_START_S / env.step_dt))
+                    buffer.add(spec.build_inputs(x[use]), spec.plan_to_label(teacher.plan[use], x[use]))
                 action = teacher.action
                 if rnd > 0:
                     plan = student.plan(x)
@@ -191,7 +220,7 @@ def main():
                     vel_err += float(node1[..., 3:6].norm(dim=-1).mean(-1).sum())
                     acc_err += float(node1[..., 6:9].norm(dim=-1).mean(-1).sum())
                     err_n += int(ok.sum())
-                    close = gap.pow(2).mean((1, 2, 3)) < GATE
+                    close = gap.pow(2).mean((1, 2, 3)) < gate
                     student_flies = (torch.rand(num_envs, device=env.device) >= beta) & close & ok
                     flown += int(student_flies.sum())
                     action = torch.where(student_flies[:, None], spec.plan_to_action(plan), teacher.action)
@@ -209,6 +238,7 @@ def main():
             else float("nan")
         )
         loss_sum = 0.0
+        model.train()
         for _ in range(args_cli.epochs):
             for xb, yb in buffer.batches(BATCH_SIZE):
                 loss = bc_loss(model, xb, yb)
@@ -219,6 +249,8 @@ def main():
 
         metrics = {
             "beta": beta,
+            "gate": gate,
+            "pushed": float(pushed),
             "vel_err_mps": vel_err / err_n if err_n else float("nan"),
             "acc_err_mps2": acc_err / err_n if err_n else float("nan"),
             "new_loss": new_loss,
@@ -233,7 +265,7 @@ def main():
         for key, value in metrics.items():
             writer.add_scalar(key, value, rnd)
         print(
-            f"[ROUND {rnd:3d}/{args_cli.iterations}] beta {beta:.2f} | student flew {100 * flown / (steps * num_envs):.0f}% | "
+            f"[ROUND {rnd:3d}/{args_cli.iterations}] beta {beta:.2f} gate {gate:.3f}{' pushed' if pushed else ''} | student flew {100 * flown / (steps * num_envs):.0f}% | "
             f"err vel {metrics['vel_err_mps']:.3f} m/s "
             f"acc {metrics['acc_err_mps2']:.3f} m/s2 | new loss {new_loss:.3f} loss {metrics['loss']:.3f} | "
             f"success {timeouts} | ended early {ended_early} | failed solves {failed} | "

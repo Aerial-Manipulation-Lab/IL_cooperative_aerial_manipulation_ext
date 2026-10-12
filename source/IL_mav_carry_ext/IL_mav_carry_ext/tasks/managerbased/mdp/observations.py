@@ -257,17 +257,15 @@ nodes, so the student sees exactly the stretch of reference each solve aims at."
 def payload_ref_horizon(
     env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
-    """The payload reference over the MPC's horizon, relative to the payload now.
+    """The payload reference over the MPC's horizon, in the thesis's load frame (section 4.3.1).
 
-    Per shooting node: position offset from the payload (3, env frame),
-    reference velocity (3) and acceleration (3), attitude relative to the
-    payload as rot6d (6), and reference body rate (3). Shape (num_envs,
-    num_nodes * 18), node-major.
+    Per shooting node, as the thesis's student sees it (its `PINN_FE` before the time column):
+    position offset from the payload now (3, env frame), velocity (3), acceleration (3), body rate (3),
+    angular acceleration (3), and the attitude as rot6d (6): the first two rows of its rotation
+    matrix, pytorch3d's convention. Shape (num_envs, num_nodes * 21), node-major.
 
-    Samples come from `LoadTrajectory.window`, the same lookup the MPC's
-    reference sampler uses, at the same clock (`common_step_counter * step_dt`)
-    the teacher solves at. rot6d is taken from the rotation matrix, which is
-    the same for q and -q, so the MPC's hemisphere choice needs no mirroring.
+    Samples come from `LoadTrajectory.window`, the same lookup the MPC's reference sampler uses, at
+    the same clock (`common_step_counter * step_dt`) the teacher solves at.
     """
     term = env.command_manager.get_term(command_name)
     now = float(env.common_step_counter) * env.step_dt
@@ -275,21 +273,18 @@ def payload_ref_horizon(
     if any(ref is None for ref in refs):
         # only before the first reset, when the observation manager probes
         # this term for its shape: no ramp has been built yet
-        return torch.zeros(env.num_envs, len(REF_HORIZON_OFFSETS) * 18, device=env.device)
+        return torch.zeros(env.num_envs, len(REF_HORIZON_OFFSETS) * 21, device=env.device)
     windows = [ref.window(now, REF_HORIZON_OFFSETS) for ref in refs]
 
     def stack(name):
         return torch.as_tensor(np.stack([getattr(w, name) for w in windows]), dtype=torch.float32, device=env.device)
 
     robot: Articulation = env.scene[asset_cfg.name]
-    payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
-    payload_pos_env = payload[:, :3] - env.scene.env_origins
-
-    # R_payload^T R_ref: the attitude still to go, in the payload's own frame
-    rot_rel = matrix_from_quat(payload[:, None, 3:7]).transpose(-1, -2) @ matrix_from_quat(stack("q"))
-    rot6d = rot_rel[..., :2].transpose(-1, -2).flatten(-2)  # first two columns, one after the other
-
-    ref = torch.cat([stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), rot6d, stack("w")], dim=-1)
+    payload_pos_env = robot.data.body_com_state_w.torch[:, payload_idx[0], :3] - env.scene.env_origins
+    rot6d = matrix_from_quat(stack("q"))[..., :2, :].flatten(-2)
+    ref = torch.cat(
+        [stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), stack("w"), stack("alpha"), rot6d], -1
+    )
     return ref.view(env.num_envs, -1)
 
 

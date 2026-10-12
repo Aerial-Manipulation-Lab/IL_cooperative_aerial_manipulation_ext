@@ -119,11 +119,17 @@ def dataset_metadata(env) -> dict:
     plant = teacher.plant
     return {
         "obs_terms": [
-            {"name": name, "dim": int(np.prod(dim))}
-            for name, dim in zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=False)
+            {"name": name, "dim": int(np.prod(dim)), "history_length": cfg.history_length}
+            for name, dim, cfg in zip(
+                manager.active_terms["policy"],
+                manager.group_obs_term_dim["policy"],
+                manager._group_obs_term_cfgs["policy"],
+                strict=True,
+            )
         ],
+        "obs_history_layout": "a term with history_length H holds H samples, oldest first, one per env step",
         "obs_per_drone_terms": "terms named drone_* are drone-major blocks, one per drone",
-        "payload_ref_horizon_layout": "per node: dp(3), v(3), a(3), rot6d(6), w(3)",
+        "payload_ref_horizon_layout": "per node: dp(3), v(3), a(3), w(3), alpha(3), rot6d rows(6)",
         "teacher_horizon_layout": "(num_drones, num_nodes, 12): p(3), v(3), a(3), w(3), env frame",
         "action_layout": "per drone: p(3), v(3), a(3), w(3) body-rate reference in the world frame",
         "num_drones": teacher.num_drones,

@@ -21,6 +21,9 @@ from python_mpc_cusadi import Circle, Square
 import IL_mav_carry_ext.tasks.managerbased.mdp as mdp
 from IL_mav_carry_ext.assets import FLYCRANE_CFG
 
+HISTORY_STEPS = 200
+"""Env steps of observation history: the thesis's 2 s at our 100 Hz."""
+
 
 # Isaac Lab 3.0 folded AdditiveGaussianNoiseCfg into GaussianNoiseCfg(operation="add")
 def Gnoise(**kwargs):
@@ -137,6 +140,15 @@ class ObservationsCfg:
         drone_cable_dir = ObsTerm(func=mdp.drone_cable_dir, noise=Gnoise(std=0.01))
         payload_ref_horizon = ObsTerm(func=mdp.payload_ref_horizon, params={"command_name": "pose_command"})
 
+        # the thesis student's 2 s of history (4.3.1), every env step; the student takes every
+        # HISTORY_STRIDE-th sample, as the thesis's 20 Hz
+        payload_position_hist = ObsTerm(func=mdp.payload_position, history_length=HISTORY_STEPS)
+        payload_orientation_hist = ObsTerm(func=mdp.payload_orientation, history_length=HISTORY_STEPS)
+        drone_positions_hist = ObsTerm(func=mdp.drone_positions, history_length=HISTORY_STEPS)
+        drone_orientations_hist = ObsTerm(func=mdp.drone_orientations, history_length=HISTORY_STEPS)
+        drone_linear_velocities_hist = ObsTerm(func=mdp.drone_linear_velocities, history_length=HISTORY_STEPS)
+        drone_angular_velocities_hist = ObsTerm(func=mdp.drone_angular_velocities, history_length=HISTORY_STEPS)
+
         # action terms
 
         def __post_init__(self):
@@ -177,6 +189,15 @@ class EventCfg:
                 "yaw": (-0.0, 0.0),
             },
         },
+    )
+
+    # the thesis's directed random perturbation of the payload, every 0.1 s; off here, dagger.py turns it
+    # on for the second half of its rounds
+    push_load = EventTerm(
+        func=mdp.DirectedLoadPush,
+        mode="interval",
+        interval_range_s=(0.1, 0.1),
+        params={"force": 0.0, "torque": 0.0},
     )
 
     base_external_force_torque = EventTerm(
