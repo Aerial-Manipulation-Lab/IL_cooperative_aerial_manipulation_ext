@@ -148,6 +148,9 @@ class ObservationsCfg:
         drone_orientations_hist = ObsTerm(func=mdp.drone_orientations, history_length=HISTORY_STEPS)
         drone_linear_velocities_hist = ObsTerm(func=mdp.drone_linear_velocities, history_length=HISTORY_STEPS)
         drone_angular_velocities_hist = ObsTerm(func=mdp.drone_angular_velocities, history_length=HISTORY_STEPS)
+        # the payload's velocities, which the thesis's student had to do without (--payload_velocity)
+        payload_linear_velocities_hist = ObsTerm(func=mdp.payload_linear_velocities, history_length=HISTORY_STEPS)
+        payload_angular_velocities_hist = ObsTerm(func=mdp.payload_angular_velocities, history_length=HISTORY_STEPS)
 
         # action terms
 

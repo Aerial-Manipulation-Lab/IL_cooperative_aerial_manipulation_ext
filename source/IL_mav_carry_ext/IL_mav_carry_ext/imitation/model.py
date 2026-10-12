@@ -18,7 +18,7 @@ import torch
 from pytorch_tcn import TCN
 from torch import nn
 
-from .features import PLAN_DIM, FeatureSpec
+from .features import LOAD_DIM_WITH_VELOCITY, PLAN_DIM, FeatureSpec
 
 POSITION_SCALE = 3.0
 """The thesis's output scale on position, velocity and acceleration."""
@@ -151,4 +151,7 @@ def load_checkpoint(path, device="cpu") -> tuple[ThesisPolicy, FeatureSpec, dict
     model = ThesisPolicy(**ckpt["model_cfg"]).to(device)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-    return model, FeatureSpec(ckpt["meta"], ckpt["label_frame"]), ckpt
+    # whether it was given the payload's velocities shows in its load stream's width
+    load_width = {name: width for name, _, width in ckpt["model_cfg"]["streams"]}["load"]
+    spec = FeatureSpec(ckpt["meta"], ckpt["label_frame"], payload_velocity=load_width == LOAD_DIM_WITH_VELOCITY)
+    return model, spec, ckpt

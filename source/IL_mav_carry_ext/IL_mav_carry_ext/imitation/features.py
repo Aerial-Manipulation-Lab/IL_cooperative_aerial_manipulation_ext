@@ -9,6 +9,7 @@ Per drone, four streams, every position relative to the payload now (the load fr
 position as origin, world axes), rotations as rot6d (the first two rows of the rotation matrix):
 
     load       2 s history: t, p_L, rot6d(R_L)                                   10 per sample
+               with payload_velocity: t, p_L, v_L, w_L (body frame), rot6d(R_L)  16 per sample
     own drone  2 s history: t, p_i, v_i, w_i (body frame), rot6d(R_i)              16 per sample
     cables     2 s history: t, the cable's end on the load, its end on the drone   7 per sample
     reference  the MPC's nodes: t, p, v, a, w, alpha, rot6d(R)                    22 per node
@@ -36,8 +37,14 @@ HISTORY_TERMS = {
 }
 """The history obs terms and their size per env step."""
 
+PAYLOAD_VELOCITY_TERMS = {"payload_linear_velocities_hist": 3, "payload_angular_velocities_hist": 3}
+"""The payload's velocity history, read only with payload_velocity."""
+
 STREAM_DIMS = {"load": 10, "drone": 16, "cables": 7, "reference": 22}
 """Values per sample of each input stream, in their order in the input vector."""
+
+LOAD_DIM_WITH_VELOCITY = 16
+"""The load stream's width with payload_velocity."""
 
 LABEL_FRAMES = ("payload", "drone")
 """payload: the thesis's L, plan positions relative to the payload now, velocities as they are.
@@ -52,10 +59,10 @@ def rot6d(matrix: torch.Tensor) -> torch.Tensor:
 class FeatureSpec:
     """Column layout of one dataset's obs, the plant behind its labels, and the label frame."""
 
-    def __init__(self, meta: dict, label_frame: str = "payload"):
+    def __init__(self, meta: dict, label_frame: str = "payload", payload_velocity: bool = False):
         if label_frame not in LABEL_FRAMES:
             raise ValueError(f"label_frame {label_frame!r} is not one of {LABEL_FRAMES}")
-        self.meta, self.label_frame = meta, label_frame
+        self.meta, self.label_frame, self.payload_velocity = meta, label_frame, payload_velocity
         self.num_drones = meta["num_drones"]
         self.num_nodes = meta["num_nodes"]
         self.slices, self.dims, self.history = {}, {}, {}
@@ -68,6 +75,7 @@ class FeatureSpec:
         self.obs_dim = start
         needed = [
             *HISTORY_TERMS,
+            *(PAYLOAD_VELOCITY_TERMS if payload_velocity else ()),
             "payload_ref_horizon",
             "payload_position",
             "drone_pos_rel_payload",
@@ -89,7 +97,8 @@ class FeatureSpec:
         """(name, samples, values per sample) of each input stream, in input order."""
         lengths = {"load": self.history_len, "drone": self.history_len, "cables": self.history_len}
         lengths["reference"] = self.num_nodes
-        return [(name, lengths[name], width) for name, width in STREAM_DIMS.items()]
+        widths = {**STREAM_DIMS, "load": LOAD_DIM_WITH_VELOCITY if self.payload_velocity else STREAM_DIMS["load"]}
+        return [(name, lengths[name], width) for name, width in widths.items()]
 
     @property
     def input_dim(self) -> int:
@@ -101,7 +110,8 @@ class FeatureSpec:
 
     def _history(self, obs: torch.Tensor, term: str) -> torch.Tensor:
         """A history term's sampled values, (N, history_len, per-step size), oldest first."""
-        steps = obs[:, self.slices[term]].reshape(obs.shape[0], self.history_steps, HISTORY_TERMS[term])
+        size = {**HISTORY_TERMS, **PAYLOAD_VELOCITY_TERMS}[term]
+        steps = obs[:, self.slices[term]].reshape(obs.shape[0], self.history_steps, size)
         return steps[:, HISTORY_STRIDE - 1 :: HISTORY_STRIDE]
 
     def build_inputs(self, obs: torch.Tensor) -> torch.Tensor:
@@ -123,7 +133,13 @@ class FeatureSpec:
             return (matrix.unflatten(-1, (3, 3)).transpose(-1, -2) @ vector[..., None])[..., 0]
 
         t = self.history_times.to(dev)[None, :, None, None].expand(n, h, d, 1)
-        load = torch.cat([load_p - origin, rot6d(load_r)], -1).expand(n, h, d, 9)
+        load = [load_p - origin]
+        if self.payload_velocity:
+            load_v = self._history(obs, "payload_linear_velocities_hist")[:, :, None]
+            load_w = self._history(obs, "payload_angular_velocities_hist")[:, :, None]
+            load += [load_v, unrotate(load_r, load_w)]
+        load = torch.cat([*load, rot6d(load_r)], -1)
+        load = load.expand(n, h, d, load.shape[-1])
         own = torch.cat([drone_p - origin, drone_v, unrotate(drone_r, drone_w), rot6d(drone_r)], -1)
         on_load = load_p + rotate(load_r.expand(n, h, d, 9), self.attach_points.to(dev).expand(n, h, d, 3))
         on_drone = drone_p + rotate(

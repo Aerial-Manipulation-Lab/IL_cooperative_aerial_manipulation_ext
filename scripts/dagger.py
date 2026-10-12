@@ -46,6 +46,9 @@ parser.add_argument("--epochs", type=int, default=16, help="Passes over every ex
 parser.add_argument("--keep_every", type=int, default=10, help="Train on every Nth step; the recording keeps all.")
 parser.add_argument("--schedule", choices=["thesis", "pure"], default="thesis", help="Who flies when; see above.")
 parser.add_argument(
+    "--payload_velocity", action="store_true", help="Give the student the payload's velocities, from the sim."
+)
+parser.add_argument(
     "--label_frame", choices=["payload", "drone"], default="payload", help="What the labels are relative to."
 )
 parser.add_argument(
@@ -161,7 +164,7 @@ def main():
         json.dump(meta, f, indent=2)
 
     if ckpt is None:
-        spec = FeatureSpec(meta, args_cli.label_frame)
+        spec = FeatureSpec(meta, args_cli.label_frame, args_cli.payload_velocity)
         model = build_model(spec, args_cli.model)
     elif spec.meta["obs_terms"] != meta["obs_terms"]:
         raise ValueError(f"{last} was trained on another obs layout than this env has")
@@ -172,7 +175,11 @@ def main():
     student = StudentPolicy(model, spec)
 
     keep = args_cli.keep_every
-    episodes = [(x[::keep], y[::keep]) for x, y in load_episodes(earlier, spec.label_frame)[0]] if earlier else []
+    episodes = (
+        [(x[::keep], y[::keep]) for x, y in load_episodes(earlier, spec.label_frame, spec.payload_velocity)[0]]
+        if earlier
+        else []
+    )
     num_envs, num_drones = env.num_envs, spec.num_drones
     steps = round(ROUND_FLIGHT_S / (num_envs * env.step_dt))
     capacity = sum(x.shape[0] * x.shape[1] for x, _ in episodes)

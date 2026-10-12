@@ -34,6 +34,7 @@ parser.add_argument("--model", choices=["pin", "mlp"], default="pin", help="Stud
 parser.add_argument(
     "--label_frame", choices=["payload", "drone"], default="payload", help="What the labels are relative to."
 )
+parser.add_argument("--payload_velocity", action="store_true", help="Give the student the payload's velocities.")
 parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
 parser.add_argument("--log_dir", type=str, default="logs/bc")
 parser.add_argument("--run_name", type=str, default=None, help="Defaults to a timestamp.")
@@ -87,7 +88,7 @@ def main():
     run_dir = os.path.abspath(os.path.join(args.log_dir, run_name))
     os.makedirs(run_dir, exist_ok=True)
 
-    episodes, spec = load_episodes(args.datasets, args.label_frame)
+    episodes, spec = load_episodes(args.datasets, args.label_frame, args.payload_velocity)
     x_train, y_train, x_val, y_val = (t.to(args.device) for t in split(episodes, args.val_frac, args.seed))
     del episodes
     print(

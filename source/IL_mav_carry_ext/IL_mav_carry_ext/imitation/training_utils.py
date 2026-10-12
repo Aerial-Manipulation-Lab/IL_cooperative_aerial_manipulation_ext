@@ -19,7 +19,9 @@ def bc_loss(model, inputs: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     return torch.nn.functional.mse_loss(model(inputs), labels)
 
 
-def load_episodes(paths: list[str], label_frame: str) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], FeatureSpec]:
+def load_episodes(
+    paths: list[str], label_frame: str, payload_velocity: bool = False
+) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], FeatureSpec]:
     """(inputs, labels) per episode over all files, as (steps, num_drones, dim) CPU tensors, and their spec.
 
     Every step whose solve succeeded is kept, also from episodes that ended early: under DAgger those
@@ -31,7 +33,7 @@ def load_episodes(paths: list[str], label_frame: str) -> tuple[list[tuple[torch.
         with open(stem + ".meta.json") as f:
             meta = json.load(f)
         if spec is None:
-            spec = FeatureSpec(meta, label_frame)
+            spec = FeatureSpec(meta, label_frame, payload_velocity)
         elif meta["obs_terms"] != spec.meta["obs_terms"]:
             raise ValueError(f"{stem}: obs layout differs from {paths[0]}")
         with h5py.File(stem + ".hdf5", "r") as f:
