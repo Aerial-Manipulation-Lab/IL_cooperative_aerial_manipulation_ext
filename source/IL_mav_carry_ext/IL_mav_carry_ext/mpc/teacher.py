@@ -53,7 +53,7 @@ class MpcTeacher:
         self._publish()
         # acados releases the GIL during the C solve, so the envs' solves overlap
         self._pool = ThreadPoolExecutor(min(self.num_envs, os.cpu_count() or 1))
-        print(f"[INFO]: MPC teacher, {self.num_envs} envs, N={self.policies[0].backend.N}")
+        print(f"[INFO]: MPC teacher, {self.num_envs} envs, N={self.policies[0].problem.N}")
 
     def reset(self, i: int, reference):
         """Cold-start env i's MPC on a new reference."""

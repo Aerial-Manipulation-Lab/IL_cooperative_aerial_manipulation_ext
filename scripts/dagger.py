@@ -33,7 +33,7 @@ parser.add_argument(
     "--task",
     type=str,
     required=True,
-    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random), Flycrane-FigureEightA2-v0 or Flycrane-FigureEightA4-v0.",
+    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightA2-v0, -FigureEightA4-v0, -Circle-v0, -Square-v0.",
 )
 parser.add_argument("--run_name", type=str, required=True, help="Run dir under logs/dagger; an existing run resumes.")
 parser.add_argument("--iterations", type=int, default=25, help="Rounds of ROUND_FLIGHT_S flight, then training.")

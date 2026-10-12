@@ -16,6 +16,7 @@ from isaaclab.utils.configclass import (
     configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 )
 from isaaclab.utils.noise import GaussianNoiseCfg
+from python_mpc_cusadi import Circle, Square
 
 import IL_mav_carry_ext.tasks.managerbased.mdp as mdp
 from IL_mav_carry_ext.assets import FLYCRANE_CFG
@@ -74,11 +75,11 @@ class ApproachPoseCommandsCfg:
 class FigureEightCommandsCfg:
     """A random figure eight, from wherever the payload starts."""
 
-    pose_command = mdp.FigureEightCommandCfg(
+    pose_command = mdp.ShapeTrajectoryCommandCfg(
         asset_name="robot",
         body_name="load_odometry_sensor_link",
         debug_vis=True,
-        ranges=mdp.FigureEightCommandCfg.Ranges(
+        ranges=mdp.ShapeTrajectoryCommandCfg.Ranges(
             amplitude=(1.0, 2.5),  # the thesis's a4 to a2 size
             acceleration=(0.5, 4.5),  # up to past the a4's 4.1 m/s^2
             yaw_rate=(-0.3, 0.3),  # both ways round, past the thesis's 0.25 rad/s
@@ -293,3 +294,21 @@ class FigureEightA4EnvCfg(FigureEightEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.commands.pose_command.csv = "figure_eight_v2_a4_yaw025.csv"
+
+
+@configclass
+class CircleEnvCfg(FigureEightEnvCfg):
+    """The thesis's test circle (6.4.2): radius 2 m, a lap per 20 s, fixed heading."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shape = Circle()
+
+
+@configclass
+class SquareEnvCfg(FigureEightEnvCfg):
+    """The thesis's test square (6.4.2): 2 m sides, 0.5 m corners, a lap per 10 s, fixed heading."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shape = Square()

@@ -29,3 +29,17 @@ gym.register(
     disable_env_checker=True,
     kwargs={"env_cfg_entry_point": f"{__name__}.flycrane_env_cfg:FigureEightA4EnvCfg"},
 )
+
+gym.register(
+    id="Flycrane-Circle-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": f"{__name__}.flycrane_env_cfg:CircleEnvCfg"},
+)
+
+gym.register(
+    id="Flycrane-Square-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": f"{__name__}.flycrane_env_cfg:SquareEnvCfg"},
+)

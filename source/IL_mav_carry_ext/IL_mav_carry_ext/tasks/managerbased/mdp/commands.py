@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import MISSING
+from dataclasses import MISSING, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,7 +23,7 @@ from isaaclab.utils.configclass import (
     configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 )
 from isaaclab.utils.math import compute_pose_error, quat_from_euler_xyz, sample_uniform
-from python_mpc_cusadi import Approach, FigureEight, LoadState, LoadTrajectory
+from python_mpc_cusadi import Approach, FigureEight, LoadState, LoadTrajectory, Shape
 from scipy.spatial.transform import Rotation
 
 from ....mpc.teacher import MpcTeacher
@@ -204,16 +204,20 @@ class ApproachPoseCommandCfg(MpcCommandCfg):
     """Length of the min-jerk ramp to each sampled goal, in s."""
 
 
-class FigureEightCommand(MpcCommand):
-    """A figure eight, moved to start at the payload and turned by its yaw: a random `FigureEight` per reset, or a CSV's."""
+class ShapeTrajectoryCommand(MpcCommand):
+    """A shape, moved to start at the payload and turned by its yaw: a random `FigureEight` per reset, a fixed
+    `Shape`, or a CSV's trajectory."""
 
-    cfg: FigureEightCommandCfg
+    cfg: ShapeTrajectoryCommandCfg
 
-    def __init__(self, cfg: FigureEightCommandCfg, env: ManagerBasedRLEnv):
+    def __init__(self, cfg: ShapeTrajectoryCommandCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
-        self.figure = LoadTrajectory.from_csv(REFERENCE_DATA / cfg.csv) if cfg.csv else None
+        self.csv = LoadTrajectory.from_csv(REFERENCE_DATA / cfg.csv) if cfg.csv else None
 
-    def _random_figure(self) -> LoadTrajectory:
+    def _shape(self) -> Shape:
+        """The configured shape, or a random figure eight."""
+        if self.cfg.shape is not None:
+            return self.cfg.shape
         r = self.cfg.ranges
         bounds = torch.tensor([r.amplitude, r.acceleration, r.yaw_rate], device=self.device)
         amplitude, acceleration, yaw_rate = sample_uniform(
@@ -221,11 +225,15 @@ class FigureEightCommand(MpcCommand):
         ).tolist()
         # a FigureEight's peak acceleration at full speed is 17/8 amplitude (2 pi / period)^2
         period = 2 * np.pi * np.sqrt(17 / 8 * amplitude / acceleration)
-        duration = self._env.max_episode_length_s + self.teacher.policies[0].horizon.Tf
-        return FigureEight(amplitude=amplitude, period=period, yaw_rate=yaw_rate, duration=duration).build()
+        return FigureEight(amplitude=amplitude, period=period, yaw_rate=yaw_rate)
 
     def _build_reference(self, env_id: int, start: LoadState) -> LoadTrajectory:
-        f = self.figure if self.figure is not None else self._random_figure()
+        if self.csv is not None:
+            f = self.csv
+        else:
+            # long enough for the MPC's horizon at the episode's end
+            duration = self._env.max_episode_length_s + self.teacher.policies[0].horizon.Tf
+            f = replace(self._shape(), duration=duration).build()
         yaw = Rotation.from_quat(start.q).as_euler("ZYX")[0] - Rotation.from_quat(f.q[0]).as_euler("ZYX")[0]
         turn = Rotation.from_euler("z", yaw)
         return LoadTrajectory(
@@ -240,10 +248,10 @@ class FigureEightCommand(MpcCommand):
 
 
 @configclass
-class FigureEightCommandCfg(MpcCommandCfg):
-    """Configuration for the figure eight."""
+class ShapeTrajectoryCommandCfg(MpcCommandCfg):
+    """Configuration for the shape trajectory."""
 
-    class_type: type = FigureEightCommand
+    class_type: type = ShapeTrajectoryCommand
 
     @configclass
     class Ranges:
@@ -255,6 +263,9 @@ class FigureEightCommandCfg(MpcCommandCfg):
 
     ranges: Ranges = MISSING
 
+    shape: Shape | None = None
+    """A fixed shape instead, the same at every reset; its duration is set to the episode's."""
+
     csv: str | None = None
-    """A fixed figure eight in REFERENCE_DATA instead, the same at every reset. The thesis's: 40 s, at rest at
+    """A fixed trajectory in REFERENCE_DATA instead of any shape, the same at every reset. The thesis's: 40 s, at rest at
     both ends, figure_eight_v2_a2_yaw025.csv 5 x 4 m, up to 2.4 m/s and 2 m/s^2, the a4 half that size, 4.1 m/s^2."""

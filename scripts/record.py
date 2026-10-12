@@ -21,7 +21,7 @@ parser.add_argument(
     "--task",
     type=str,
     required=True,
-    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random), Flycrane-FigureEightA2-v0 or Flycrane-FigureEightA4-v0.",
+    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightA2-v0, -FigureEightA4-v0, -Circle-v0, -Square-v0.",
 )
 parser.add_argument("--num_envs", type=int, default=8, help="Flycranes flying in parallel.")
 parser.add_argument("--num_episodes", type=int, default=200, help="Stop once this many episodes are written.")
