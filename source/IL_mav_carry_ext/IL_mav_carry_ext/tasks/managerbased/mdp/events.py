@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import Articulation, RigidObject
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
@@ -109,3 +109,38 @@ def reset_spline_position_buffer(
     env.action_manager._terms[action_term].spline_positions[env_ids] = (
         drone_positions[env_ids].unsqueeze(2).repeat(1, 1, 6, 1)
     )
+
+
+class DirectedLoadPush(ManagerTermBase):
+    """The thesis's directed random perturbation of the payload (4.4.1; `wrench_class.py`, `DataCollector`).
+
+    Every interval a world-frame force and torque on the payload: the force straight down, the torque about a
+    direction drawn per episode, each with a magnitude drawn uniformly between a tenth of its maximum and the
+    maximum, anew every interval. With `force` and `torque` 0 it is off and clears what it applied before.
+    """
+
+    def __init__(self, cfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self.asset: Articulation = env.scene[cfg.params.get("asset_cfg", SceneEntityCfg("robot")).name]
+        self.body_ids = [payload_idx[0]]
+        self.torque_dir = torch.nn.functional.normalize(torch.rand(env.num_envs, 3, device=env.device) - 0.5, dim=-1)
+
+    def reset(self, env_ids=None):
+        ids = slice(None) if env_ids is None else env_ids
+        n = self.torque_dir[ids].shape[0]
+        self.torque_dir[ids] = torch.nn.functional.normalize(torch.rand(n, 3, device=self._env.device) - 0.5, dim=-1)
+
+    def __call__(self, env: ManagerBasedEnv, env_ids, force: float, torque: float, asset_cfg=SceneEntityCfg("robot")):
+        if env_ids is None:
+            env_ids = torch.arange(env.num_envs, device=env.device)
+        env_ids = env_ids.to(dtype=torch.int32)
+        n = len(env_ids)
+
+        def magnitude(peak):
+            return math_utils.sample_uniform(0.1 * peak, peak, (n, 1), env.device)
+
+        forces = torch.tensor([0.0, 0.0, -1.0], device=env.device) * magnitude(force)
+        torques = self.torque_dir[env_ids.long()] * magnitude(torque)
+        self.asset.permanent_wrench_composer.set_forces_and_torques_index(
+            forces=forces[:, None], torques=torques[:, None], body_ids=self.body_ids, env_ids=env_ids, is_global=True
+        )

@@ -35,6 +35,13 @@ parser.add_argument(
     required=True,
     help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightA2-v0, -FigureEightA4-v0, -Circle-v0, -Square-v0.",
 )
+parser.add_argument(
+    "--noise", action="store_true", help="Noisy student inputs: the env's obs noise. The teacher keeps the true state."
+)
+parser.add_argument(
+    "--push", action="store_true", help="Push the payload as the thesis does, in the second half of the rounds."
+)
+parser.add_argument("--rotor_drag", action="store_true", help="Rotor drag on every rotor, as the thesis's Gazebo.")
 parser.add_argument("--run_name", type=str, required=True, help="Run dir under logs/dagger; an existing run resumes.")
 parser.add_argument("--iterations", type=int, default=25, help="Rounds of ROUND_FLIGHT_S flight, then training.")
 parser.add_argument("--num_envs", type=int, default=8, help="Flycranes flying in parallel.")
@@ -81,6 +88,7 @@ BATCH_SIZE = 256
 LR = 1e-3
 GATE = 0.03  # the thesis's 0.02 MSE over 20 state columns per node, rescaled to our 12
 ROUND_FLIGHT_S = 40.0
+PUSH_FORCE, PUSH_TORQUE = 6.0, 0.1  # N, Nm: the thesis code's pushes (DirectedLoadPush)
 LOG_DIR = "logs/dagger"
 
 
@@ -129,6 +137,8 @@ def main():
 
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = start
+    env_cfg.observations.policy.enable_corruption = args_cli.noise
+    env_cfg.actions.low_level_action.rotor_drag = args_cli.rotor_drag
     env_cfg.recorders = MpcRecorderManagerCfg(dataset_export_dir_path=run_dir, dataset_filename=rollouts)
     env = ManagerBasedRLEnv(cfg=env_cfg)
     teacher = env.command_manager.get_term("pose_command").teacher
@@ -174,6 +184,10 @@ def main():
             break
         round_start = time.time()
         beta = 1.0 if rnd == 0 else 0.0
+        pushed = args_cli.push and rnd >= args_cli.iterations // 2
+        push = env.event_manager.get_term_cfg("push_load")
+        push.params.update(force=PUSH_FORCE if pushed else 0.0, torque=PUSH_TORQUE if pushed else 0.0)
+        env.event_manager.set_term_cfg("push_load", push)
         vel_err = acc_err = err_n = failed = ended_early = timeouts = flown = 0
         ended_by = {}
         fresh = buffer.n
@@ -219,6 +233,7 @@ def main():
 
         metrics = {
             "beta": beta,
+            "pushed": float(pushed),
             "vel_err_mps": vel_err / err_n if err_n else float("nan"),
             "acc_err_mps2": acc_err / err_n if err_n else float("nan"),
             "new_loss": new_loss,
@@ -233,7 +248,7 @@ def main():
         for key, value in metrics.items():
             writer.add_scalar(key, value, rnd)
         print(
-            f"[ROUND {rnd:3d}/{args_cli.iterations}] beta {beta:.2f} | student flew {100 * flown / (steps * num_envs):.0f}% | "
+            f"[ROUND {rnd:3d}/{args_cli.iterations}] beta {beta:.2f}{' pushed' if pushed else ''} | student flew {100 * flown / (steps * num_envs):.0f}% | "
             f"err vel {metrics['vel_err_mps']:.3f} m/s "
             f"acc {metrics['acc_err_mps2']:.3f} m/s2 | new loss {new_loss:.3f} loss {metrics['loss']:.3f} | "
             f"success {timeouts} | ended early {ended_early} | failed solves {failed} | "

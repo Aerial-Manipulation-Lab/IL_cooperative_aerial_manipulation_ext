@@ -23,6 +23,9 @@ from .marker_utils import (
     ORIENTATION_MARKER_CFG,
 )
 
+ROTOR_DRAG_COEFFICIENT = 8.06428e-05
+"""RotorS's rotor drag coefficient for the thesis's Gazebo Falcon (agiros `falcon_rope.xacro`)."""
+
 
 class LowLevelAction(ActionTerm):
     """Low level action term for the hover task."""
@@ -249,13 +252,23 @@ class LowLevelAction(ActionTerm):
         self._ll_counter += 1
         self._tick += 1
 
-        # Isaac Lab 3.0: reset once, then compose both wrenches (see marl_hover_env for why).
+        # the rotors' wrenches are new every physics step, so they go to the instantaneous composer, which the
+        # asset clears after each write; the permanent one is left to lasting wrenches such as the payload push
         robot = self._env.scene["robot"]
-        robot.permanent_wrench_composer.reset()
         # apply torques induced by rotors to each body
-        robot.permanent_wrench_composer.add_forces_and_torques(torques=self._moments, body_ids=self._falcon_idx)
+        robot.instantaneous_wrench_composer.add_forces_and_torques(torques=self._moments, body_ids=self._falcon_idx)
         # apply forces to each rotor
-        robot.permanent_wrench_composer.add_forces_and_torques(forces=self._forces, body_ids=self._body_ids)
+        forces = self._forces + self._rotor_drag() if self.cfg.rotor_drag else self._forces
+        robot.instantaneous_wrench_composer.add_forces_and_torques(forces=forces, body_ids=self._body_ids)
+
+    def _rotor_drag(self) -> torch.Tensor:
+        """RotorS's rotor drag on each rotor, in the rotor's frame like its thrust: -c |omega| v, with v the
+        rotor's velocity in its own plane. RotorS's rolling moment (coefficient 1e-6 there) is left out."""
+        rotors = self._robot.data.body_com_state_w.torch[:, self._body_ids]
+        velocity = math_utils.quat_apply_inverse(rotors[..., 3:7], rotors[..., 7:10])
+        velocity[..., 2] = 0.0
+        omega = torch.cat([self.motor_models[i].current_omega for i in range(self._num_drones)], dim=-1)
+        return -ROTOR_DRAG_COEFFICIENT * omega.abs()[..., None] * velocity
 
     """
     visualizations
@@ -404,3 +417,5 @@ class LowLevelActionCfg(ActionTermCfg):
     """Decimation factor for the low level action term."""
     debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
+    rotor_drag: bool = False
+    """RotorS's rotor drag on every rotor (ROTOR_DRAG_COEFFICIENT), as in the thesis's Gazebo. The MPC doesn't model it."""

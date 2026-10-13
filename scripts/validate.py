@@ -23,6 +23,10 @@ parser = argparse.ArgumentParser(description="Validate a student or the teacher 
 parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint from scripts/train.py or dagger.py.")
 parser.add_argument("--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline.")
 parser.add_argument("--num_envs", type=int, default=1, help="Flights per task, each from its own random start.")
+parser.add_argument(
+    "--noise", action="store_true", help="Noisy student inputs: the env's obs noise. The teacher keeps the true state."
+)
+parser.add_argument("--rotor_drag", action="store_true", help="Rotor drag on every rotor, as the thesis's Gazebo.")
 parser.add_argument("--seed", type=int, default=0, help="Seed for every task; the same seed gives the same starts.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -62,6 +66,8 @@ def main():
         sim_utils.create_new_stage()
         env_cfg = parse_env_cfg(task, device=args_cli.device, num_envs=args_cli.num_envs)
         env_cfg.seed = args_cli.seed
+        env_cfg.observations.policy.enable_corruption = args_cli.noise
+        env_cfg.actions.low_level_action.rotor_drag = args_cli.rotor_drag
         # a failed teacher solve says nothing about the student's flight
         env_cfg.terminations.mpc_failed = None
         env_cfg.commands.pose_command.solve_teacher = args_cli.teacher

@@ -179,6 +179,15 @@ class EventCfg:
         },
     )
 
+    # the thesis's directed random perturbation of the payload, every 0.1 s; off here, dagger.py --push turns it
+    # on for the second half of its rounds
+    push_load = EventTerm(
+        func=mdp.DirectedLoadPush,
+        mode="interval",
+        interval_range_s=(0.1, 0.1),
+        params={"force": 0.0, "torque": 0.0},
+    )
+
     base_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
         mode="reset",
