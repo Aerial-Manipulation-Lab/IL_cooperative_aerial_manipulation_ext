@@ -53,9 +53,10 @@ parser.add_argument(
 )
 parser.add_argument(
     "--model",
-    choices=["pin", "mlp"],
+    choices=["pin", "mlp", "main"],
     default="pin",
-    help="Student network, see build_model; a resumed run keeps its own.",
+    help="Student network, see build_model; main is main's MLP on main's inputs (no history; pass --label_frame"
+    " drone and --payload_velocity, as main). A resumed run keeps its own.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -164,7 +165,7 @@ def main():
         json.dump(meta, f, indent=2)
 
     if ckpt is None:
-        spec = FeatureSpec(meta, args_cli.label_frame, args_cli.payload_velocity)
+        spec = FeatureSpec(meta, args_cli.label_frame, args_cli.payload_velocity, history=args_cli.model != "main")
         model = build_model(spec, args_cli.model)
     elif spec.meta["obs_terms"] != meta["obs_terms"]:
         raise ValueError(f"{last} was trained on another obs layout than this env has")
@@ -176,7 +177,10 @@ def main():
 
     keep = args_cli.keep_every
     episodes = (
-        [(x[::keep], y[::keep]) for x, y in load_episodes(earlier, spec.label_frame, spec.payload_velocity)[0]]
+        [
+            (x[::keep], y[::keep])
+            for x, y in load_episodes(earlier, spec.label_frame, spec.payload_velocity, spec.history_inputs)[0]
+        ]
         if earlier
         else []
     )

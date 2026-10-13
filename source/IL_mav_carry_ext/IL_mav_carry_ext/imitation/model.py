@@ -125,12 +125,36 @@ class ThesisPolicy(nn.Module):
             return self(inputs.clone())
 
 
-def build_model(spec: FeatureSpec, name: str) -> ThesisPolicy:
-    """An untrained student with a "pin" or "mlp" decoder; the one place train.py and dagger.py get it from."""
+class MainPolicy(nn.Module):
+    """main's student (its `BCPolicy`): an MLP from the state now (`FeatureSpec(history=False)`) to the label."""
+
+    def __init__(self, input_dim: int, label_dim: int, hidden: tuple[int, ...] = (256, 256, 256)):
+        super().__init__()
+        self.cfg = {"input_dim": input_dim, "label_dim": label_dim, "hidden": list(hidden)}
+        layers, width = [], input_dim
+        for h in hidden:
+            layers += [nn.Linear(width, h), nn.ELU()]
+            width = h
+        layers.append(nn.Linear(width, label_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.net(inputs)
+
+    @torch.no_grad()
+    def predict(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Inputs (..., input_dim) -> labels (..., label_dim)."""
+        return self.net(inputs)
+
+
+def build_model(spec: FeatureSpec, name: str) -> ThesisPolicy | MainPolicy:
+    """An untrained student: "pin" or "mlp" decoder, or main's MLP; the one place train.py and dagger.py get it from."""
+    if name == "main":
+        return MainPolicy(spec.input_dim, spec.label_dim)
     return ThesisPolicy(spec.streams, spec.meta["node_offsets_s"], name, spec.label_frame)
 
 
-def save_checkpoint(path, model: ThesisPolicy, spec: FeatureSpec, **extra):
+def save_checkpoint(path, model: ThesisPolicy | MainPolicy, spec: FeatureSpec, **extra):
     """Everything needed to fly the student without the training script."""
     torch.save(
         {
@@ -145,13 +169,20 @@ def save_checkpoint(path, model: ThesisPolicy, spec: FeatureSpec, **extra):
     )
 
 
-def load_checkpoint(path, device="cpu") -> tuple[ThesisPolicy, FeatureSpec, dict]:
+def load_checkpoint(path, device="cpu") -> tuple[ThesisPolicy | MainPolicy, FeatureSpec, dict]:
     """(model, feature spec, the whole checkpoint dict) from `save_checkpoint`."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    model = ThesisPolicy(**ckpt["model_cfg"]).to(device)
+    if ckpt["model"] == "MainPolicy":
+        model = MainPolicy(**ckpt["model_cfg"]).to(device)
+        # whether it was given the payload's velocities shows in its input width
+        with_velocity = FeatureSpec(ckpt["meta"], ckpt["label_frame"], payload_velocity=True, history=False)
+        payload_velocity = ckpt["model_cfg"]["input_dim"] == with_velocity.input_dim
+        spec = FeatureSpec(ckpt["meta"], ckpt["label_frame"], payload_velocity, history=False)
+    else:
+        model = ThesisPolicy(**ckpt["model_cfg"]).to(device)
+        # whether it was given the payload's velocities shows in its load stream's width
+        load_width = {name: width for name, _, width in ckpt["model_cfg"]["streams"]}["load"]
+        spec = FeatureSpec(ckpt["meta"], ckpt["label_frame"], payload_velocity=load_width == LOAD_DIM_WITH_VELOCITY)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-    # whether it was given the payload's velocities shows in its load stream's width
-    load_width = {name: width for name, _, width in ckpt["model_cfg"]["streams"]}["load"]
-    spec = FeatureSpec(ckpt["meta"], ckpt["label_frame"], payload_velocity=load_width == LOAD_DIM_WITH_VELOCITY)
     return model, spec, ckpt

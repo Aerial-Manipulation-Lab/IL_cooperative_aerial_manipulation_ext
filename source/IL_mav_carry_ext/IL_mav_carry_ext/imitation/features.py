@@ -15,6 +15,10 @@ position as origin, world axes), rotations as rot6d (the first two rows of the r
     reference  the MPC's nodes: t, p, v, a, w, alpha, rot6d(R)                    22 per node
 
 t is the sample's time relative to now. The history is the thesis's 40 samples at 20 Hz.
+
+Without history, the inputs are main's instead (`--model main`): the state now and the reference in main's
+layout, so that main's student trains on the same flights. The payload's velocities only with payload_velocity,
+which main always has.
 """
 
 import torch
@@ -46,6 +50,20 @@ STREAM_DIMS = {"load": 10, "drone": 16, "cables": 7, "reference": 22}
 LOAD_DIM_WITH_VELOCITY = 16
 """The load stream's width with payload_velocity."""
 
+NOW_SHARED_TERMS = ("payload_orientation",)
+NOW_PAYLOAD_VELOCITY_TERMS = ("payload_linear_velocities", "payload_angular_velocities")
+NOW_PER_DRONE_TERMS = (
+    "drone_pos_rel_payload",
+    "drone_orientations",
+    "drone_linear_velocities",
+    "drone_angular_velocities",
+    "drone_cable_dir",
+)
+"""main's inputs besides the reference: shared, then drone-major (drone d gets block d), then the attach point."""
+
+MAIN_REF_DIM = 18
+"""main's reference per node: dp, v, a, rot6d (the first two columns of R_payload^T R_ref), w."""
+
 LABEL_FRAMES = ("payload", "drone")
 """payload: the thesis's L, plan positions relative to the payload now, velocities as they are.
 drone: plan positions and velocities relative to the drone's own now."""
@@ -59,10 +77,12 @@ def rot6d(matrix: torch.Tensor) -> torch.Tensor:
 class FeatureSpec:
     """Column layout of one dataset's obs, the plant behind its labels, and the label frame."""
 
-    def __init__(self, meta: dict, label_frame: str = "payload", payload_velocity: bool = False):
+    def __init__(self, meta: dict, label_frame: str = "payload", payload_velocity: bool = False, history: bool = True):
         if label_frame not in LABEL_FRAMES:
             raise ValueError(f"label_frame {label_frame!r} is not one of {LABEL_FRAMES}")
         self.meta, self.label_frame, self.payload_velocity = meta, label_frame, payload_velocity
+        self.history_inputs = history
+        self.now_shared = NOW_SHARED_TERMS + (NOW_PAYLOAD_VELOCITY_TERMS if payload_velocity else ())
         self.num_drones = meta["num_drones"]
         self.num_nodes = meta["num_nodes"]
         self.slices, self.dims, self.history = {}, {}, {}
@@ -76,6 +96,7 @@ class FeatureSpec:
         needed = [
             *HISTORY_TERMS,
             *(PAYLOAD_VELOCITY_TERMS if payload_velocity else ()),
+            *(() if history else self.now_shared + NOW_PER_DRONE_TERMS),
             "payload_ref_horizon",
             "payload_position",
             "drone_pos_rel_payload",
@@ -102,6 +123,9 @@ class FeatureSpec:
 
     @property
     def input_dim(self) -> int:
+        if not self.history_inputs:
+            shared = sum(self.dims[t] for t in self.now_shared) + self.num_nodes * MAIN_REF_DIM
+            return shared + sum(self.dims[t] // self.num_drones for t in NOW_PER_DRONE_TERMS) + 3
         return sum(length * width for _, length, width in self.streams)
 
     @property
@@ -116,6 +140,8 @@ class FeatureSpec:
 
     def build_inputs(self, obs: torch.Tensor) -> torch.Tensor:
         """Flat policy obs (N, obs_dim) -> per-drone inputs (N, num_drones, input_dim)."""
+        if not self.history_inputs:
+            return self._inputs_now(obs)
         n, d, h, dev = obs.shape[0], self.num_drones, self.history_len, obs.device
         origin = obs[:, self.slices["payload_position"]][:, None, None]  # the payload now, (N, 1, 1, 3)
 
@@ -153,6 +179,19 @@ class FeatureSpec:
         streams = [torch.cat([t, load], -1), torch.cat([t, own], -1), torch.cat([t, cables], -1)]
         flat = [s.transpose(1, 2).flatten(2) for s in streams]  # (N, d, H * width), sample-major
         return torch.cat([*flat, ref.flatten(1)[:, None].expand(n, d, -1)], -1)
+
+    def _inputs_now(self, obs: torch.Tensor) -> torch.Tensor:
+        """main's `build_inputs`, its reference block rebuilt from this branch's."""
+        n, d, k = obs.shape[0], self.num_drones, self.num_nodes
+        ref = obs[:, self.slices["payload_ref_horizon"]].reshape(n, k, -1)
+        r0, r1 = ref[..., 15:18], ref[..., 18:21]  # rows of R_payload^T R_ref
+        rel = torch.stack([r0, r1, torch.cross(r0, r1, dim=-1)], -2)
+        columns = rel[..., :2].transpose(-1, -2).flatten(-2)
+        ref = torch.cat([ref[..., 0:9], columns, ref[..., 9:12]], -1).flatten(1)
+        shared = torch.cat([*(obs[:, self.slices[t]] for t in self.now_shared), ref], -1)
+        own = torch.cat([obs[:, self.slices[t]].reshape(n, d, -1) for t in NOW_PER_DRONE_TERMS], -1)
+        attach = self.attach_points.to(obs.device).expand(n, -1, -1)
+        return torch.cat([shared[:, None].expand(-1, d, -1), own, attach], -1)
 
     def drone_state(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Each drone's env-frame position and velocity now, (N, num_drones, 3) each."""
