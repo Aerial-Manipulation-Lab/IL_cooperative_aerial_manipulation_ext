@@ -57,24 +57,15 @@ import time
 
 import torch
 from IL_mav_carry_ext.mpc import MpcRecorderManagerCfg, dataset_metadata
+from IL_mav_carry_ext.reporting import Heartbeat, TextReporter, episode_numbers
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
 
-HEARTBEAT_S = 10.0
-
-
-def print_heartbeat(env, steps, total_steps, elapsed, num_written, episode_steps):
-    sim_s = float(env.episode_length_buf.float().mean()) * env.step_dt
-    eta_min = elapsed / steps * max(total_steps - steps, 0) / 60
-    print(
-        f"[REC]   step {steps}/{total_steps} | episode time {sim_s:4.1f}/{episode_steps * env.step_dt:.0f} s | "
-        f"{steps * env.num_envs / elapsed:.0f} env-steps/s | "
-        f"written {num_written}/{args_cli.num_episodes} | eta {eta_min:.1f} min",
-        flush=True,
-    )
+PROGRESS_S = 10.0
 
 
 def main():
+    report = TextReporter("record")
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = args_cli.seed
     env_cfg.commands.pose_command.rebuild = args_cli.rebuild
@@ -84,56 +75,54 @@ def main():
     )
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
-    teacher = env.command_manager.get_term("pose_command").teacher
     recorder = env.recorder_manager
 
     meta = dataset_metadata(env)
     meta.update(seed=args_cli.seed, num_envs=args_cli.num_envs)
     with open(output + ".meta.json", "w") as f:
         json.dump(meta, f, indent=2)
-    print(f"[INFO]: recording to {output}.hdf5", flush=True)
 
     def written():
         return recorder.exported_successful_episode_count + recorder.exported_failed_episode_count
 
     episode_steps = int(env.max_episode_length)
     total_steps = math.ceil(args_cli.num_episodes / args_cli.num_envs) * episode_steps
-    print(
-        f"[INFO]: {args_cli.num_episodes} episodes of {episode_steps} steps on {args_cli.num_envs} envs: "
-        f"about {total_steps} env steps; progress every {HEARTBEAT_S:.0f} s",
-        flush=True,
+    report.info(
+        f"recording {args_cli.num_episodes} episodes of {episode_steps} steps on {args_cli.num_envs} envs "
+        f"(about {total_steps} env steps) to {output}.hdf5"
     )
 
     obs, _ = env.reset()
-    start = last_beat = time.time()
+    start = time.time()
+    progress = Heartbeat(PROGRESS_S)
     steps = 0
-    failed_solves = 0
-    last_written = 0
     while simulation_app.is_running() and written() < args_cli.num_episodes:
         with torch.inference_mode():
-            obs, *_ = env.step(obs["label"].flatten(1))  # the teacher flies its own plan
+            obs, _, terminated, truncated, extras = env.step(obs["label"].flatten(1))  # the teacher flies its plan
         steps += 1
-        failed_solves += int((~teacher.ok).sum())
-        now = time.time()
-        num_written = written()
+        if bool((terminated | truncated).any()):
+            report.metrics("episodes ended", {"written": written(), **episode_numbers(extras["log"])})
 
-        if num_written != last_written:
-            last_written = num_written
-            print(
-                f"[REC] episodes written {num_written}/{args_cli.num_episodes} | "
-                f"success {recorder.exported_successful_episode_count / num_written:.0%} | "
-                f"failed solves {failed_solves}",
-                flush=True,
+        if progress.due():
+            elapsed = time.time() - start
+            report.metrics(
+                "progress",
+                {
+                    "step": steps,
+                    "episode_time_s": float(env.episode_length_buf.float().mean()) * env.step_dt,
+                    "env_steps_per_s": steps * env.num_envs / elapsed,
+                    "written": written(),
+                    "eta_min": elapsed / steps * max(total_steps - steps, 0) / 60,
+                },
             )
 
-        if now - last_beat >= HEARTBEAT_S:
-            last_beat = now
-            print_heartbeat(env, steps, total_steps, now - start, num_written, episode_steps)
-
-    print(
-        f"[INFO]: wrote {written()} episodes ({recorder.exported_successful_episode_count} successful) "
-        f"in {(time.time() - start) / 60:.1f} min to {output}.hdf5",
-        flush=True,
+    report.metrics(
+        "done",
+        {
+            "written": written(),
+            "completed": recorder.exported_successful_episode_count,
+            "minutes": (time.time() - start) / 60,
+        },
     )
     env.close()
 

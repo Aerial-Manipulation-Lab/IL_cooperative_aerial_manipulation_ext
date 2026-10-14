@@ -3,15 +3,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The behaviour-cloning students: an MLP and a physics-informed TCN + FCN.
-
-Both map a drone's policy row to its label row, its plan in its own frame, which is also its
-action. Physical units, unnormalised, as the thesis trains them."""
+"""The behaviour-cloning student: an MLP from a drone's policy row to its label row, its plan in its
+own frame, which is also its action. Physical units, unnormalised, as the thesis trains it."""
 
 import torch
 from torch import nn
-
-from .features import input_dim, label_dim
 
 
 class BCPolicy(nn.Module):
@@ -34,34 +30,3 @@ class BCPolicy(nn.Module):
     def predict(self, inputs: torch.Tensor) -> torch.Tensor:
         """Inputs (..., input_dim) -> labels (..., label_dim)."""
         return self.net(inputs)
-
-
-def build_model(meta: dict, name: str) -> BCPolicy:
-    """An untrained student for the policy rows `meta` describes."""
-    if name == "mlp":
-        return BCPolicy(input_dim(meta), label_dim(meta), hidden=(256, 256, 256))
-    raise ValueError(f"unknown student {name!r}")
-
-
-def save_checkpoint(path, model: BCPolicy, meta: dict, **extra):
-    """Everything needed to fly the student without the training script."""
-    torch.save(
-        {
-            "model": type(model).__name__,
-            "model_cfg": model.cfg,
-            "state_dict": model.state_dict(),
-            "meta": meta,
-            **extra,
-        },
-        path,
-    )
-
-
-def load_checkpoint(path, device="cpu") -> tuple[BCPolicy, dict, dict]:
-    """(model, the policy rows' metadata, the whole checkpoint dict) from `save_checkpoint`."""
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    cfg = ckpt["model_cfg"]
-    model = BCPolicy(cfg["input_dim"], cfg["label_dim"], tuple(cfg["hidden"])).to(device)
-    model.load_state_dict(ckpt["state_dict"])
-    model.eval()
-    return model, ckpt["meta"], ckpt

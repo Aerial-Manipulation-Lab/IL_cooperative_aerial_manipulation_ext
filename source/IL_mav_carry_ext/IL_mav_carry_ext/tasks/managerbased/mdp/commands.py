@@ -53,8 +53,9 @@ class MpcCommand(CommandTerm):
         self.body_idx = self.robot.find_bodies(cfg.body_name)[0][0]
         self.pose_command_w = torch.zeros(self.num_envs, 7, device=self.device)
         self.pose_command_w[:, 6] = 1.0
-        self.metrics["position_error"] = torch.zeros(self.num_envs, device=self.device)
-        self.metrics["orientation_error"] = torch.zeros(self.num_envs, device=self.device)
+        # the payload's tracking RMSE over the episode so far; Isaac Lab hands them out when it ends
+        self.metrics["pos_rmse_m"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["att_rmse_deg"] = torch.zeros(self.num_envs, device=self.device)
         self.references: list = [None] * self.num_envs
         self.teacher = MpcTeacher(env, rebuild=cfg.rebuild)
         self.solved_at = np.full(self.num_envs, -1)
@@ -89,14 +90,22 @@ class MpcCommand(CommandTerm):
         self._track(range(self.num_envs))
 
     def _update_metrics(self):
+        """Add this step's error to each episode's running RMSE; Isaac Lab zeroes them at each reset."""
+        # metrics update before the command does, so look up the reference at this step's time first
+        self._track(range(self.num_envs))
         pos_error, rot_error = compute_pose_error(
             self.pose_command_w[:, :3],
             self.pose_command_w[:, 3:],
             self.robot.data.body_com_state_w.torch[:, self.body_idx, :3] - self._env.scene.env_origins,
             self.robot.data.body_com_state_w.torch[:, self.body_idx, 3:7],
         )
-        self.metrics["position_error"] = torch.norm(pos_error, dim=-1)
-        self.metrics["orientation_error"] = torch.norm(rot_error, dim=-1)
+        n = self._env.episode_length_buf.clamp(min=1)
+        for name, error in (
+            ("pos_rmse_m", pos_error.norm(dim=-1)),
+            ("att_rmse_deg", torch.rad2deg(rot_error.norm(dim=-1))),
+        ):
+            rmse = self.metrics[name]
+            rmse[:] = (rmse**2 + (error**2 - rmse**2) / n).sqrt()
 
     def _solve(self, env_ids: list[int]):
         self.teacher.solve(env_ids, self._now())

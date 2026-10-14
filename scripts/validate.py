@@ -37,9 +37,9 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import isaaclab.sim as sim_utils
-import numpy as np
 import torch
 from IL_mav_carry_ext.imitation import load_checkpoint
+from IL_mav_carry_ext.reporting import TextReporter, episode_numbers
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.sim import SimulationContext
 from isaaclab_tasks.utils import parse_env_cfg
@@ -54,8 +54,9 @@ TASKS = [
 
 
 def main():
+    report = TextReporter("validate")
     student = None if args_cli.teacher else load_checkpoint(args_cli.checkpoint, args_cli.device)[0]
-    results = []
+    results = {}
     for task in TASKS:
         if not simulation_app.is_running():
             break
@@ -66,62 +67,37 @@ def main():
         env_cfg.terminations.mpc_failed = None
         env_cfg.commands.pose_command.solve_teacher = args_cli.teacher
         env = ManagerBasedRLEnv(cfg=env_cfg)
-        command = env.command_manager.get_term("pose_command")
-        teacher = command.teacher
 
-        n, dt = env.num_envs, env.step_dt
-        every = round(0.1 / dt)
-        pairs = np.triu_indices(teacher.num_drones, 1)
-        origins = env.scene.env_origins.cpu().numpy()
-        pos_sq, ang_sq, samples, flown = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
-        closest = np.full(n, np.inf)
-        done, completed = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+        n = env.num_envs
+        done = torch.zeros(n, dtype=torch.bool, device=env.device)
+        completed = torch.zeros_like(done)
+        completed_numbers = {}  # every completed flight ends on the same step, so its reset's numbers are their means
 
         obs, _ = env.reset()
-        step = 0
         while simulation_app.is_running() and not done.all():
-            state = teacher.robot.data.body_com_state_w.torch.cpu().numpy()
-            drones = state[:, teacher.falcon_idx, :3]
-            gap = np.linalg.norm(drones[:, pairs[0]] - drones[:, pairs[1]], axis=-1).min(1)
-            closest = np.where(done, closest, np.minimum(closest, gap))
-            if step % every == 0:
-                now = env.common_step_counter * dt
-                for i in np.flatnonzero(~done):
-                    ref = command.get_reference(i)
-                    k = ref.indices_at(now - dt / 2)
-                    load = state[i, teacher.load_idx]
-                    pos_sq[i] += np.sum((load[:3] - origins[i] - ref.p[k]) ** 2)
-                    ang_sq[i] += np.degrees(2 * np.arccos(min(1.0, abs(float(np.dot(load[3:7], ref.q[k])))))) ** 2
-                    samples[i] += 1
-
             with torch.inference_mode():
                 action = obs["label"] if student is None else student.predict(obs["policy"])
-                obs, _, terminated, truncated, _ = env.step(action.flatten(1))
-            step += 1
+                obs, _, terminated, truncated, extras = env.step(action.flatten(1))
 
-            ended = (terminated | truncated).cpu().numpy() & ~done
-            completed |= ended & truncated.cpu().numpy()
-            flown[ended] = step * dt
+            ended = (terminated | truncated) & ~done
+            if ended.any():
+                numbers = episode_numbers(extras["log"])
+                ended_completed = int((ended & truncated).sum())
+                report.metrics(
+                    f"{task} episodes ended", {"ended": int(ended.sum()), "completed": ended_completed, **numbers}
+                )
+                if ended_completed:
+                    completed_numbers = numbers
+            completed |= ended & truncated
             done |= ended
         env.close()
         SimulationContext.clear_instance()
 
-        pos = np.sqrt(pos_sq / np.maximum(samples, 1))
-        ang = np.sqrt(ang_sq / np.maximum(samples, 1))
-        print()
-        for i in range(n):
-            print(
-                f"  env {i}: {'completed' if completed[i] else 'crashed'} after {flown[i]:.1f} s | "
-                f"position RMSE {pos[i]:.3f} m | attitude RMSE {ang[i]:.2f} deg | closest drones {closest[i]:.2f} m"
-            )
-        c = completed
-        results.append(
-            f"[RESULT] {task}: {int(c.sum())}/{n} completed | position RMSE {pos[c].mean():.3f} m | "
-            f"attitude RMSE {ang[c].mean():.2f} deg (means over completed flights) | closest drones {closest.min():.2f} m"
-        )
-        print(results[-1], flush=True)
+        results[task] = {"completed": int(completed.sum()), "envs": n, **completed_numbers}
+        report.metrics(f"result {task}", results[task])
 
-    print("\n" + "\n".join(results), flush=True)
+    for task, result in results.items():
+        report.metrics(f"result {task}", result)
 
 
 if __name__ == "__main__":

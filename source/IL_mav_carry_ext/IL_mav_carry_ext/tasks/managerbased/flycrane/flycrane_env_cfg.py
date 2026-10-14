@@ -234,7 +234,8 @@ class TerminationsCfg:
         func=mdp.cable_collision, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.2, "num_points": 10}
     )
 
-    drones_collide = DoneTerm(func=mdp.drone_collision, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.2})
+    # the thesis counts an episode that stops with two drones closer than 0.4 m as a failure (6.2)
+    drones_collide = DoneTerm(func=mdp.drone_collision, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4})
 
     bounding_box = DoneTerm(func=mdp.bounding_box, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 5.0})
 

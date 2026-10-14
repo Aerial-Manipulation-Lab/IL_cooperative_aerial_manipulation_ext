@@ -5,8 +5,9 @@
 
 """Fly a trained student, or the NMPC teacher with --teacher, for one episode per env.
 
-Reports the thesis's metrics on the payload against its reference, sampled every 0.1 s: position
-RMSE and attitude RMSE, plus the closest two drones came and whether the episode was completed.
+Reports the thesis's metrics, which the env computes (`MpcCommand`'s metrics, Isaac Lab's termination
+shares): the payload's position and attitude RMSE against its reference, and how each episode ended,
+with two drones closer than 0.4 m ending it as a failure, as in the thesis.
 
 Example, from the repo root:
 
@@ -50,16 +51,17 @@ import os
 from datetime import datetime
 
 import gymnasium as gym
-import numpy as np
 import torch
 from IL_mav_carry_ext.imitation import load_checkpoint
+from IL_mav_carry_ext.reporting import Heartbeat, TextReporter, episode_numbers
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
 
-PRINT_S = 5.0
+PROGRESS_S = 10.0
 
 
 def main():
+    report = TextReporter("play")
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = args_cli.seed
     # a failed teacher solve says nothing about the student's flight
@@ -73,7 +75,6 @@ def main():
 
     base = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     command = base.command_manager.get_term("pose_command")
-    teacher = command.teacher
     name = "teacher" if args_cli.teacher else os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
     env = base
     if args_cli.video:
@@ -88,62 +89,40 @@ def main():
         )
     student = None if args_cli.teacher else load_checkpoint(args_cli.checkpoint, base.device)[0]
 
-    n, dt = base.num_envs, base.step_dt
-    every = round(0.1 / dt)
-    pairs = np.triu_indices(teacher.num_drones, 1)
-    origins = base.scene.env_origins.cpu().numpy()
-    pos_sq, ang_sq, samples, flown = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
-    closest = np.full(n, np.inf)
-    done, completed = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+    n = base.num_envs
+    done = torch.zeros(n, dtype=torch.bool, device=base.device)
+    completed = torch.zeros_like(done)
+    completed_numbers = {}  # every completed flight ends on the same step, so its reset's numbers are their means
 
     obs, _ = env.reset()
+    progress = Heartbeat(PROGRESS_S)
     step = 0
     while simulation_app.is_running() and not done.all():
-        state = teacher.robot.data.body_com_state_w.torch.cpu().numpy()
-        drones = state[:, teacher.falcon_idx, :3]
-        gap = np.linalg.norm(drones[:, pairs[0]] - drones[:, pairs[1]], axis=-1).min(1)
-        closest = np.where(done, closest, np.minimum(closest, gap))
-        if step % every == 0:
-            now = base.common_step_counter * dt
-            for i in np.flatnonzero(~done):
-                ref = command.get_reference(i)
-                k = ref.indices_at(now - dt / 2)
-                load = state[i, teacher.load_idx]
-                pos_sq[i] += np.sum((load[:3] - origins[i] - ref.p[k]) ** 2)
-                ang_sq[i] += np.degrees(2 * np.arccos(min(1.0, abs(float(np.dot(load[3:7], ref.q[k])))))) ** 2
-                samples[i] += 1
-
         with torch.inference_mode():
             action = obs["label"] if student is None else student.predict(obs["policy"])
-            obs, _, terminated, truncated, _ = env.step(action.flatten(1))
+            obs, _, terminated, truncated, extras = env.step(action.flatten(1))
         step += 1
 
-        ended = (terminated | truncated).cpu().numpy() & ~done
-        completed |= ended & truncated.cpu().numpy()
-        flown[ended] = step * dt
+        ended = (terminated | truncated) & ~done
+        if ended.any():
+            numbers = episode_numbers(extras["log"])
+            ended_completed = int((ended & truncated).sum())
+            report.metrics("episodes ended", {"ended": int(ended.sum()), "completed": ended_completed, **numbers})
+            if ended_completed:
+                completed_numbers = numbers
+        completed |= ended & truncated
         done |= ended
-        if step % round(PRINT_S / dt) == 0:
-            live = samples > 0
-            print(
-                f"[t={step * dt:5.1f} s] {int(done.sum())}/{n} ended | position RMSE so far "
-                f"{np.sqrt(pos_sq[live] / samples[live]).mean():.3f} m",
-                flush=True,
+        if progress.due() and not done.all():
+            report.metrics(
+                "progress",
+                {
+                    "t_s": step * base.step_dt,
+                    "ended": int(done.sum()),
+                    "pos_rmse_m": float(command.metrics["pos_rmse_m"][~done].mean()),
+                },
             )
 
-    pos = np.sqrt(pos_sq / np.maximum(samples, 1))
-    ang = np.sqrt(ang_sq / np.maximum(samples, 1))
-    print()
-    for i in range(n):
-        print(
-            f"  env {i}: {'completed' if completed[i] else 'crashed'} after {flown[i]:.1f} s | "
-            f"position RMSE {pos[i]:.3f} m | attitude RMSE {ang[i]:.2f} deg | closest drones {closest[i]:.2f} m"
-        )
-    c = completed
-    print(
-        f"[RESULT] {name}: {int(c.sum())}/{n} completed | position RMSE {pos[c].mean():.3f} m | "
-        f"attitude RMSE {ang[c].mean():.2f} deg (means over completed flights) | closest drones {closest.min():.2f} m",
-        flush=True,
-    )
+    report.metrics(f"result {name}", {"completed": int(completed.sum()), "envs": n, **completed_numbers})
     env.close()
 
 

@@ -19,9 +19,8 @@ from datetime import datetime
 
 import numpy as np
 import torch
-from IL_mav_carry_ext.imitation import PLAN_DIM, bc_loss, build_model, load_episodes, save_checkpoint
-from torch.utils.data import DataLoader, TensorDataset
-from torch.utils.tensorboard import SummaryWriter
+from IL_mav_carry_ext.imitation import PLAN_DIM, BehaviourCloning, build_model, load_episodes, save_checkpoint
+from IL_mav_carry_ext.reporting import TensorBoardReporter, TextReporter
 
 parser = argparse.ArgumentParser(description="Behaviour cloning on NMPC demonstrations.")
 parser.add_argument("datasets", nargs="+", help="Dataset paths, with or without .hdf5.")
@@ -52,92 +51,47 @@ def split(episodes, val_frac, seed):
     return (*stack(order[n_val:]), *stack(order[:n_val]))
 
 
-@torch.no_grad()
-def evaluate(model, x, y, num_nodes, batch_size):
-    """Validation loss (MSE) and errors, in physical units."""
-    loss, sq_err = 0.0, torch.zeros(num_nodes, PLAN_DIM, device=x.device)
-    for i in range(0, len(x), batch_size):
-        xb, yb = x[i : i + batch_size], y[i : i + batch_size]
-        pred = model(xb)
-        loss += torch.nn.functional.mse_loss(pred, yb, reduction="sum").item()
-        sq_err += ((pred - yb) ** 2).reshape(-1, num_nodes, PLAN_DIM).sum(0)
-    rmse = (sq_err / len(x)).sqrt()
-
-    def vec(node, part):
-        return float(rmse[node, part].norm())
-
-    p, v, a, w = slice(0, 3), slice(3, 6), slice(6, 9), slice(9, 12)
-    return {
-        "val/loss": loss / y.numel(),
-        "val/node1_pos_cm": 100 * vec(1, p),
-        "val/node1_vel_mps": vec(1, v),
-        "val/node1_acc_mps2": vec(1, a),
-        "val/node1_rate_radps": vec(1, w),
-        "val/last_node_pos_cm": 100 * vec(-1, p),
-        "val/horizon_pos_cm": 100 * float(rmse[:, p].norm(dim=-1).mean()),
-    }
-
-
 def main():
+    report = TextReporter("train")
     torch.manual_seed(args.seed)
     run_name = args.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.abspath(os.path.join(args.log_dir, run_name))
     os.makedirs(run_dir, exist_ok=True)
 
     episodes, meta = load_episodes(args.datasets)
+    report.info(f"loaded {len(episodes)} episodes from {len(args.datasets)} datasets")
     x_train, y_train, x_val, y_val = (t.to(args.device) for t in split(episodes, args.val_frac, args.seed))
     del episodes
-    print(
-        f"[INFO]: {len(x_train)} train / {len(x_val)} val samples, "
+    report.info(
+        f"{len(x_train)} train / {len(x_val)} val samples, "
         f"input {x_train.shape[-1]}, label {y_train.shape[-1]} ({meta['num_nodes']} nodes x {PLAN_DIM})"
     )
 
-    loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
     model = build_model(meta, args.model).to(args.device)
-    optimiser = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.5, patience=5)
+    bc = BehaviourCloning(model, (x_train, y_train), (x_val, y_val), args.lr, args.batch_size)
 
     config = {**vars(args), "run_name": run_name, "train_samples": len(x_train), "val_samples": len(x_val)}
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
-    writer = SummaryWriter(run_dir)
-    print(f"[INFO]: logging to {run_dir} (tensorboard)")
+    tensorboard = TensorBoardReporter(run_dir)
+    report.info(f"logging to {run_dir}")
 
     best = float("inf")
     for epoch in range(1, args.epochs + 1):
         start = time.time()
-        model.train()
-        train_loss = 0.0
-        for xb, yb in loader:
-            loss = bc_loss(model, xb, yb)
-            optimiser.zero_grad()
-            loss.backward()
-            optimiser.step()
-            train_loss += loss.item() * len(xb)
-
-        model.eval()
-        metrics = evaluate(model, x_val, y_val, meta["num_nodes"], args.batch_size)
-        metrics["train/loss"] = train_loss / len(x_train)
-        metrics["lr"] = optimiser.param_groups[0]["lr"]
-        scheduler.step(metrics["val/loss"])
-        for key, value in metrics.items():
-            writer.add_scalar(key, value, epoch)
+        metrics = {**bc.update(), "epoch_s": time.time() - start}
+        report.metrics(f"epoch {epoch}", metrics)
+        tensorboard.metrics(metrics, epoch)
 
         extra = {"epoch": epoch, "metrics": metrics, "train_args": vars(args)}
         save_checkpoint(os.path.join(run_dir, "last.pt"), model, meta, **extra)
-        if metrics["val/loss"] < best:
-            best = metrics["val/loss"]
+        if metrics["val_loss"] < best:
+            best = metrics["val_loss"]
             save_checkpoint(os.path.join(run_dir, "best.pt"), model, meta, **extra)
-        print(
-            f"[{epoch:3d}] train {metrics['train/loss']:.4f}  val {metrics['val/loss']:.4f}  "
-            f"node1 pos {metrics['val/node1_pos_cm']:.2f} cm  vel {metrics['val/node1_vel_mps']:.3f} m/s  "
-            f"acc {metrics['val/node1_acc_mps2']:.3f} m/s2  | horizon pos {metrics['val/horizon_pos_cm']:.2f} cm  "
-            f"({time.time() - start:.1f}s)",
-            flush=True,
-        )
 
-    writer.close()
-    print(f"[INFO]: best val loss {best:.4f}; checkpoints in {run_dir}")
+    tensorboard.close()
+    report.metrics("done", {"best_val_loss": best})
+    report.info(f"checkpoints in {run_dir}")
 
 
 if __name__ == "__main__":
