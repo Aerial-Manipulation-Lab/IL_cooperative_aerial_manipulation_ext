@@ -12,7 +12,6 @@ is still the one the action was computed from, and the teacher's plan was
 solved for that same state, so each row is one matching (obs, label) pair.
 """
 
-import numpy as np
 import torch
 from isaaclab.envs.mdp.recorders.recorders_cfg import (
     InitialStateRecorderCfg,
@@ -35,11 +34,11 @@ def teacher_of(env):
     return env.command_manager.get_term("pose_command").teacher
 
 
-class TeacherHorizonRecorder(RecorderTerm):
-    """The teacher's whole plan this step: (num_envs, num_drones, num_nodes, 12), p, v, a, w."""
+class LabelRecorder(RecorderTerm):
+    """The label group: each drone's teacher plan in its own frame, (num_envs, num_drones, num_nodes * 12)."""
 
     def record_pre_step(self):
-        return "teacher_horizon", teacher_of(self._env).plan
+        return "label", self._env.obs_buf["label"]
 
 
 class TeacherLoadPlanRecorder(RecorderTerm):
@@ -81,12 +80,12 @@ class MpcOkRecorder(RecorderTerm):
 class MpcRecorderManagerCfg(RecorderManagerBaseCfg):
     """Everything one NMPC demonstration dataset holds, per step unless noted.
 
-    - `obs`: the flat policy obs, the student's input; `dataset_metadata`
-      says which columns are which term.
-    - `teacher_horizon`: the label, each drone's full plan.
+    - `obs`: the policy group, the student's input, one row per drone;
+      `dataset_metadata` says which columns are which term.
+    - `label`: the label group, each drone's teacher plan in its own frame.
     - `teacher_load_plan`: the payload pose that plan predicts, per node.
     - `teacher_tension`: the cable tensions the teacher assumed; `rope_force`: what the sim's ropes pull with.
-    - `actions`: the action executed; when the teacher flies, node 1 of the label.
+    - `actions`: the action executed; when the teacher flies, the label.
     - `mpc_ok`: whether the label's solve succeeded.
     - `states`: the full scene state after the step; `initial_state` the same,
       once, at the episode's start.
@@ -98,7 +97,7 @@ class MpcRecorderManagerCfg(RecorderManagerBaseCfg):
     record_post_step_states = PostStepStatesRecorderCfg()
     record_pre_step_actions = PreStepActionsRecorderCfg()
     record_pre_step_obs = PreStepFlatPolicyObservationsRecorderCfg()
-    record_teacher_horizon = RecorderTermCfg(class_type=TeacherHorizonRecorder)
+    record_label = RecorderTermCfg(class_type=LabelRecorder)
     record_teacher_load_plan = RecorderTermCfg(class_type=TeacherLoadPlanRecorder)
     record_teacher_tension = RecorderTermCfg(class_type=TeacherTensionRecorder)
     record_rope_force = RecorderTermCfg(class_type=RopeForceRecorder)
@@ -108,39 +107,18 @@ class MpcRecorderManagerCfg(RecorderManagerBaseCfg):
 
 
 def dataset_metadata(env) -> dict:
-    """What a loader needs to read a dataset, as JSON-ready builtins.
-
-    The recorded obs is one flat vector; the term layout here is what turns
-    its columns back into named terms. The rest pins down what the labels
-    mean: node times, frames, and the plant the teacher modelled.
-    """
-    teacher = teacher_of(env)
+    """What a loader needs to read a dataset, as JSON-ready builtins: the policy group's terms in
+    order, with their width per drone, and the times of the plan's nodes."""
     manager = env.observation_manager
-    plant = teacher.plant
+    teacher = teacher_of(env)
     return {
-        "obs_terms": [
-            {"name": name, "dim": int(np.prod(dim))}
-            for name, dim in zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=False)
+        "policy_terms": [
+            {"name": name, "dim": int(dims[-1])}
+            for name, dims in zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=True)
         ],
-        "obs_per_drone_terms": "terms named drone_* are drone-major blocks, one per drone",
-        "payload_ref_horizon_layout": "per node: dp(3), v(3), a(3), rot6d(6), w(3)",
-        "teacher_horizon_layout": "(num_drones, num_nodes, 12): p(3), v(3), a(3), w(3), env frame",
-        "action_layout": "per drone: p(3), v(3), a(3), w(3) body-rate reference in the world frame",
         "num_drones": teacher.num_drones,
         "num_nodes": teacher.num_nodes,
         "node_offsets_s": [float(t) for t in REF_HORIZON_OFFSETS],
         "step_dt": float(env.step_dt),
         "episode_length_s": float(env.cfg.episode_length_s),
-        "plant": {
-            "load_mass": float(plant.load_mass),
-            "load_inertia": np.asarray(plant.load_inertia, dtype=float).tolist(),
-            "drones": [
-                {
-                    "mass": float(d.mass),
-                    "cable_length": float(d.cable_length),
-                    "attach_point": np.asarray(d.attach_point, dtype=float).tolist(),
-                }
-                for d in plant.drones
-            ],
-        },
     }

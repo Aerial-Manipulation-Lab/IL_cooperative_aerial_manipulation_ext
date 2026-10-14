@@ -22,10 +22,14 @@ from .marker_utils import (
     FORCE_MARKER_Z_CFG,
     ORIENTATION_MARKER_CFG,
 )
+from .observations import REF_HORIZON_OFFSETS
+
+NUM_NODES = len(REF_HORIZON_OFFSETS)
+"""Nodes per drone in the action's plan: the MPC's shooting nodes."""
 
 
 class LowLevelAction(ActionTerm):
-    """Low level action term for the hover task."""
+    """Flies node 1 of each drone's plan with the geometric and INDI controllers."""
 
     cfg: LowLevelActionCfg
 
@@ -50,6 +54,7 @@ class LowLevelAction(ActionTerm):
             self._waypoint_dim = 5
 
         # buffers
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
         self._forces = torch.zeros(self.num_envs, len(self._body_ids), 3, device=self.device)
         self._prev_forces = torch.zeros(self.num_envs, len(self._body_ids), 3, device=self.device)
         self._moments = torch.zeros(self.num_envs, len(self._falcon_idx), 3, device=self.device)
@@ -116,11 +121,11 @@ class LowLevelAction(ActionTerm):
 
     @property
     def action_dim(self) -> int:
-        return self._num_drones * self._waypoint_dim * self._num_waypoints
+        return self._num_drones * NUM_NODES * 12
 
     @property
     def raw_actions(self) -> torch.Tensor:
-        return self._waypoints
+        return self._raw_actions
 
     @property
     def processed_actions(self) -> torch.Tensor:
@@ -137,13 +142,19 @@ class LowLevelAction(ActionTerm):
             self._indi_controllers[i].reset(env_ids)
             self.motor_models[i].reset(env_ids)
 
-    def process_actions(self, waypoints: torch.Tensor):
-        """Process the waypoints to be used by the geometric low level controller.
+    def process_actions(self, actions: torch.Tensor):
+        """Turn each drone's plan into its setpoint: node 1, back in the env frame.
+
         Args:
-            waypoint: The waypoints to be processed.
-        Returns:
-            The processed external forces to be applied to the rotors."""
-        self._waypoints = waypoints
+            actions: (num_envs, num_drones * num_nodes * 12), each drone's plan in its own frame as
+                `teacher_plan_rel_drone` gives it: per node p, v, a, w, with the drone's position and
+                velocity now taken off p and v. They are added back here."""
+        self._raw_actions[:] = actions
+        drones = self._robot.data.body_com_state_w.torch[:, self._falcon_idx]
+        node1 = actions.reshape(self.num_envs, self._num_drones, NUM_NODES, 12)[:, :, 1].clone()
+        node1[..., 0:3] += drones[..., :3] - self._env.scene.env_origins[:, None]
+        node1[..., 3:6] += drones[..., 7:10]
+        self._waypoints = node1.flatten(1)
         self._prev_forces = self._forces.clone()
         self._tick = 0
         for i in range(self._num_drones):

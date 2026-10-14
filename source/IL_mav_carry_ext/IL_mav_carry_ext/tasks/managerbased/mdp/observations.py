@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import numpy as np
 import torch
 from isaaclab.assets import Articulation
@@ -147,7 +149,7 @@ def cable_angle(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityC
 
 
 """
-Observations for the drones
+Observations for the drones: one row per drone, (num_envs, num_drones, k)
 """
 
 
@@ -156,7 +158,7 @@ def drone_positions(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
     robot: Articulation = env.scene[asset_cfg.name]
     drone_pos_world_frame = robot.data.body_com_state_w.torch[:, drone_idx, :3]
     drone_pos_env_frame = drone_pos_world_frame - env.scene.env_origins.unsqueeze(1)
-    return drone_pos_env_frame.view(env.num_envs, -1)
+    return drone_pos_env_frame
 
 
 def drone_orientations(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -164,7 +166,7 @@ def drone_orientations(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scene
     robot: Articulation = env.scene[asset_cfg.name]
     drone_quat = robot.data.body_com_state_w.torch[:, drone_idx, 3:7]
     drone_rot_matrix = matrix_from_quat(drone_quat)
-    return drone_rot_matrix.view(env.num_envs, -1)
+    return drone_rot_matrix.flatten(-2)
 
 
 def drone_linear_velocities(
@@ -172,7 +174,7 @@ def drone_linear_velocities(
 ) -> torch.Tensor:
     """Drone linear velocity in world frame."""
     robot: Articulation = env.scene[asset_cfg.name]
-    return robot.data.body_com_state_w.torch[:, drone_idx, 7:10].view(env.num_envs, -1)
+    return robot.data.body_com_state_w.torch[:, drone_idx, 7:10]
 
 
 def drone_angular_velocities(
@@ -180,7 +182,7 @@ def drone_angular_velocities(
 ) -> torch.Tensor:
     """Drone angular velocity in world frame."""
     robot: Articulation = env.scene[asset_cfg.name]
-    return robot.data.body_com_state_w.torch[:, drone_idx, 10:].view(env.num_envs, -1)
+    return robot.data.body_com_state_w.torch[:, drone_idx, 10:]
 
 
 def drone_linear_acceleration(
@@ -188,7 +190,7 @@ def drone_linear_acceleration(
 ) -> torch.Tensor:
     """Drone linear acceleration in world frame."""
     robot: Articulation = env.scene[asset_cfg.name]
-    return robot.data.body_acc_w.torch[:, drone_idx, 0:3].view(env.num_envs, -1)
+    return robot.data.body_acc_w.torch[:, drone_idx, 0:3]
 
 
 def drone_angular_acceleration(
@@ -196,7 +198,7 @@ def drone_angular_acceleration(
 ) -> torch.Tensor:
     """Drone angular acceleration in world frame."""
     robot: Articulation = env.scene[asset_cfg.name]
-    return robot.data.body_acc_w.torch[:, drone_idx, 3:].view(env.num_envs, -1)
+    return robot.data.body_acc_w.torch[:, drone_idx, 3:]
 
 
 # relative drone positions
@@ -207,8 +209,7 @@ def payload_drone_rpos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scene
     robot: Articulation = env.scene[asset_cfg.name]
     drone_pos_world_frame = robot.data.body_com_state_w.torch[:, drone_idx, :3]
     payload_pos_world_frame = robot.data.body_com_state_w.torch[:, payload_idx, :3]
-    rpos = drone_pos_world_frame - payload_pos_world_frame
-    return rpos.view(env.num_envs, -1)
+    return drone_pos_world_frame - payload_pos_world_frame
 
 
 def drone_rpos_obs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -233,7 +234,7 @@ def drone_cable_dir(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
 
     The attach points are the MPC teacher's (`FLYCRANE_SIM`), so this is the cable
     geometry exactly as the MPC builds it from the measured endpoints under
-    its taut-cable assumption. Shape (num_envs, 3 * num_drones), drone-major.
+    its taut-cable assumption.
     """
     robot: Articulation = env.scene[asset_cfg.name]
     payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
@@ -244,7 +245,7 @@ def drone_cable_dir(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
     payload_quat = payload[:, None, 3:7].expand(-1, num_drones, -1)
     attach_world = payload[:, None, :3] + quat_apply(payload_quat, attach_body.expand(env.num_envs, -1, -1))
     cable = robot.data.body_com_state_w.torch[:, drone_idx, :3] - attach_world
-    return torch.nn.functional.normalize(cable, dim=-1).view(env.num_envs, -1)
+    return torch.nn.functional.normalize(cable, dim=-1)
 
 
 # Observations of the reference the MPC tracks
@@ -291,6 +292,41 @@ def payload_ref_horizon(
 
     ref = torch.cat([stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), rot6d, stack("w")], dim=-1)
     return ref.view(env.num_envs, -1)
+
+
+# The uniform student's input and label, one row per drone
+
+
+def copy_to_each_drone(
+    env: ManagerBasedRLEnv, term: Callable[..., torch.Tensor], params: dict | None = None
+) -> torch.Tensor:
+    """A term that is the same for every drone (the payload, its reference), (num_envs, k), copied
+    to each: (num_envs, num_drones, k). `params` go to `term`."""
+    return term(env, **(params or {}))[:, None].expand(-1, FLYCRANE_SIM.num_drones, -1)
+
+
+def drone_attach_point(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Each drone's cable attach point on the payload, payload body frame, as the MPC has it
+    (`FLYCRANE_SIM`): (num_envs, num_drones, 3). The one input that tells the drones apart."""
+    points = np.stack([d.attach_point for d in FLYCRANE_SIM.drones])
+    return torch.tensor(points, dtype=torch.float32, device=env.device).expand(env.num_envs, -1, -1)
+
+
+def teacher_plan_rel_drone(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Each drone's teacher plan in the drone's own frame: the student's label and the teacher's
+    action, (num_envs, num_drones, num_nodes * 12).
+
+    Per node p, v, a, w as `MpcTeacher.plan`, with the drone's position and velocity now taken
+    off p and v; the action term adds them back. From the true state, so noise on the policy
+    group never reaches it. The command term solves before the obs are computed, so this is the
+    plan for the state the policy group holds.
+    """
+    teacher = env.command_manager.get_term(command_name).teacher
+    drones = teacher.robot.data.body_com_state_w.torch[:, teacher.falcon_idx]
+    label = teacher.plan.clone()
+    label[..., 0:3] -= (drones[..., :3] - env.scene.env_origins[:, None])[:, :, None]
+    label[..., 3:6] -= drones[:, :, None, 7:10]
+    return label.flatten(-2)
 
 
 # Observations for when sampling multiple points on a trajectory

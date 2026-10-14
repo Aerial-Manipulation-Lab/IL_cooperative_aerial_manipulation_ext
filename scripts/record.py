@@ -104,14 +104,14 @@ def main():
         flush=True,
     )
 
-    env.reset()
+    obs, _ = env.reset()
     start = last_beat = time.time()
     steps = 0
     failed_solves = 0
     last_written = 0
     while simulation_app.is_running() and written() < args_cli.num_episodes:
         with torch.inference_mode():
-            env.step(teacher.action)
+            obs, *_ = env.step(obs["label"].flatten(1))  # the teacher flies its own plan
         steps += 1
         failed_solves += int((~teacher.ok).sum())
         now = time.time()

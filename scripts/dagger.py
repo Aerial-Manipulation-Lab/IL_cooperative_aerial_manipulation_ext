@@ -42,8 +42,8 @@ parser.add_argument("--epochs", type=int, default=16, help="Passes over every ex
 parser.add_argument("--keep_every", type=int, default=10, help="Train on every Nth step; the recording keeps all.")
 parser.add_argument(
     "--model",
-    choices=["pin", "mlp"],
-    default="pin",
+    choices=["mlp"],
+    default="mlp",
     help="Student network, see build_model; a resumed run keeps its own.",
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -64,10 +64,11 @@ import time
 
 import torch
 from IL_mav_carry_ext.imitation import (
-    FeatureSpec,
-    StudentPolicy,
+    PLAN_DIM,
     bc_loss,
     build_model,
+    input_dim,
+    label_dim,
     load_checkpoint,
     load_episodes,
     save_checkpoint,
@@ -85,11 +86,11 @@ LOG_DIR = "logs/dagger"
 
 
 class Buffer:
-    """Every (input, label) example so far, one row per drone and step, on the GPU."""
+    """Every (policy row, label row) example so far, one row per drone and step, on the GPU."""
 
-    def __init__(self, capacity, spec, device):
-        self.x = torch.empty(capacity, spec.input_dim, device=device)
-        self.y = torch.empty(capacity, spec.label_dim, device=device)
+    def __init__(self, capacity, input_dim, label_dim, device):
+        self.x = torch.empty(capacity, input_dim, device=device)
+        self.y = torch.empty(capacity, label_dim, device=device)
         self.n = 0
 
     def add(self, inputs, labels):
@@ -120,7 +121,7 @@ def main():
     last = os.path.join(run_dir, "last.pt")
     ckpt = None
     if os.path.exists(last):
-        model, spec, ckpt = load_checkpoint(last)
+        model, run_meta, ckpt = load_checkpoint(last)
     start = ckpt["round"] + 1 if ckpt is not None else 0
     rollouts = f"rollouts_{start:03d}"
     # a fresh start ignores leftovers of an attempt that never finished a round
@@ -137,23 +138,21 @@ def main():
         json.dump(meta, f, indent=2)
 
     if ckpt is None:
-        spec = FeatureSpec(meta)
-        model = build_model(spec, args_cli.model)
-    elif spec.meta["obs_terms"] != meta["obs_terms"]:
-        raise ValueError(f"{last} was trained on another obs layout than this env has")
+        model = build_model(meta, args_cli.model)
+    elif run_meta["policy_terms"] != meta["policy_terms"]:
+        raise ValueError(f"{last} was trained on other policy terms than this env has")
     model.to(env.device)
     optimiser = torch.optim.Adam(model.parameters(), lr=LR)
     if ckpt is not None:
         optimiser.load_state_dict(ckpt["optimizer"])
-    student = StudentPolicy(model, spec)
 
     keep = args_cli.keep_every
     episodes = [(x[::keep], y[::keep]) for x, y in load_episodes(earlier)[0]] if earlier else []
-    num_envs, num_drones = env.num_envs, spec.num_drones
+    num_envs, num_drones = env.num_envs, meta["num_drones"]
     steps = round(ROUND_FLIGHT_S / (num_envs * env.step_dt))
     capacity = sum(x.shape[0] * x.shape[1] for x, _ in episodes)
     capacity += max(args_cli.iterations - start, 0) * math.ceil(steps / keep) * num_envs * num_drones
-    buffer = Buffer(capacity, spec, env.device)
+    buffer = Buffer(capacity, input_dim(meta), label_dim(meta), env.device)
     for x, y in episodes:
         buffer.add(x.to(env.device), y.to(env.device))
     del episodes
@@ -179,14 +178,14 @@ def main():
         fresh = buffer.n
         with torch.no_grad():
             for step in range(steps):
-                x, ok = obs["policy"], teacher.ok
+                x, label, ok = obs["policy"], obs["label"], teacher.ok
                 failed += int((~ok).sum())
                 if step % keep == 0:
-                    buffer.add(spec.build_inputs(x[ok]), spec.plan_to_label(teacher.plan[ok], x[ok]))
-                action = teacher.action
+                    buffer.add(x[ok], label[ok])
+                action = label  # the teacher flies its own plan
                 if rnd > 0:
-                    plan = student.plan(x)
-                    gap = plan - teacher.plan
+                    pred = model.predict(x)
+                    gap = (pred - label).unflatten(-1, (-1, PLAN_DIM))  # (num_envs, num_drones, num_nodes, 12)
                     node1 = gap[ok][:, :, 1]  # what the drones are sent: node 1's velocity and acceleration
                     vel_err += float(node1[..., 3:6].norm(dim=-1).mean(-1).sum())
                     acc_err += float(node1[..., 6:9].norm(dim=-1).mean(-1).sum())
@@ -194,8 +193,8 @@ def main():
                     close = gap.pow(2).mean((1, 2, 3)) < GATE
                     student_flies = (torch.rand(num_envs, device=env.device) >= beta) & close & ok
                     flown += int(student_flies.sum())
-                    action = torch.where(student_flies[:, None], spec.plan_to_action(plan), teacher.action)
-                obs, _, terminated, truncated, _ = env.step(action)
+                    action = torch.where(student_flies[:, None, None], pred, label)
+                obs, _, terminated, truncated, _ = env.step(action.flatten(1))
                 ended_early += int(terminated.sum())
                 timeouts += int(truncated.sum())
                 if bool((terminated | truncated).any()):
@@ -241,8 +240,8 @@ def main():
             + (", ".join(f"{name} {count}" for name, count in ended_by.items() if count) or "-"),
             flush=True,
         )
-        save_checkpoint(os.path.join(run_dir, f"round_{rnd:03d}.pt"), model, spec, round=rnd, metrics=metrics)
-        save_checkpoint(last, model, spec, round=rnd, metrics=metrics, optimizer=optimiser.state_dict())
+        save_checkpoint(os.path.join(run_dir, f"round_{rnd:03d}.pt"), model, meta, round=rnd, metrics=metrics)
+        save_checkpoint(last, model, meta, round=rnd, metrics=metrics, optimizer=optimiser.state_dict())
 
     writer.close()
     env.close()

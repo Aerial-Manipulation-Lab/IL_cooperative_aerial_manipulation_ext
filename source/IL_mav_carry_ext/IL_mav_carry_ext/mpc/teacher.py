@@ -22,7 +22,6 @@ class MpcTeacher:
     """One NMPC per env, owned by the pose command term. After `solve`:
 
     - `plan`: (num_envs, num_drones, num_nodes, 12), each drone's p, v, a, w per node, env frame.
-    - `action`: (num_envs, num_drones * 12), node 1's p, v, a, w (world frame), as the action term takes it.
     - `ok`: (num_envs,) bool, False where the last solve failed.
     - `load_plan`: (num_envs, num_nodes, 7), the payload pose the last solve predicts: p, then q (XYZW).
     - `tension`: (num_envs, num_drones), the cable tensions the last solve started from, carried, never measured.
@@ -104,5 +103,3 @@ class MpcTeacher:
     def _publish(self):
         self.plan = torch.as_tensor(self._plan, dtype=torch.float32, device=self.device)
         self.ok = torch.as_tensor(self._ok, device=self.device)
-        node1 = self.plan[:, :, 1]
-        self.action = node1.flatten(1)

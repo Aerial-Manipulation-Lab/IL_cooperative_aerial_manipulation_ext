@@ -39,7 +39,7 @@ simulation_app = app_launcher.app
 import isaaclab.sim as sim_utils
 import numpy as np
 import torch
-from IL_mav_carry_ext.imitation import StudentPolicy
+from IL_mav_carry_ext.imitation import load_checkpoint
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.sim import SimulationContext
 from isaaclab_tasks.utils import parse_env_cfg
@@ -54,7 +54,7 @@ TASKS = [
 
 
 def main():
-    student = None if args_cli.teacher else StudentPolicy.load(args_cli.checkpoint, args_cli.device)
+    student = None if args_cli.teacher else load_checkpoint(args_cli.checkpoint, args_cli.device)[0]
     results = []
     for task in TASKS:
         if not simulation_app.is_running():
@@ -95,8 +95,8 @@ def main():
                     samples[i] += 1
 
             with torch.inference_mode():
-                action = teacher.action if student is None else student(obs["policy"])
-                obs, _, terminated, truncated, _ = env.step(action)
+                action = obs["label"] if student is None else student.predict(obs["policy"])
+                obs, _, terminated, truncated, _ = env.step(action.flatten(1))
             step += 1
 
             ended = (terminated | truncated).cpu().numpy() & ~done

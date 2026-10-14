@@ -52,7 +52,7 @@ from datetime import datetime
 import gymnasium as gym
 import numpy as np
 import torch
-from IL_mav_carry_ext.imitation import StudentPolicy
+from IL_mav_carry_ext.imitation import load_checkpoint
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
 
@@ -86,7 +86,7 @@ def main():
             video_length=args_cli.video_length,
             disable_logger=True,
         )
-    student = None if args_cli.teacher else StudentPolicy.load(args_cli.checkpoint, base.device)
+    student = None if args_cli.teacher else load_checkpoint(args_cli.checkpoint, base.device)[0]
 
     n, dt = base.num_envs, base.step_dt
     every = round(0.1 / dt)
@@ -114,8 +114,8 @@ def main():
                 samples[i] += 1
 
         with torch.inference_mode():
-            action = teacher.action if student is None else student(obs["policy"])
-            obs, _, terminated, truncated, _ = env.step(action)
+            action = obs["label"] if student is None else student.predict(obs["policy"])
+            obs, _, terminated, truncated, _ = env.step(action.flatten(1))
         step += 1
 
         ended = (terminated | truncated).cpu().numpy() & ~done

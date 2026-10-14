@@ -3,28 +3,23 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Imitation learning from the NMPC teacher: student features and model.
+"""Imitation learning from the NMPC teacher: the student models and their training.
 
 Torch only -- nothing here needs the simulator, so training runs without it.
 """
 
-from .features import LABEL_FRAME, PER_DRONE_TERMS, PLAN_DIM, SHARED_TERMS, FeatureSpec
-from .model import BCPolicy, PINPolicy, build_model, load_checkpoint, save_checkpoint
-from .student import StudentPolicy
+from .features import PLAN_DIM, input_dim, label_dim
+from .model import BCPolicy, build_model, load_checkpoint, save_checkpoint
 from .training_utils import bc_loss, load_episodes
 
 __all__ = [
-    "LABEL_FRAME",
-    "PER_DRONE_TERMS",
     "PLAN_DIM",
-    "SHARED_TERMS",
     "BCPolicy",
-    "PINPolicy",
-    "FeatureSpec",
     "bc_loss",
     "build_model",
-    "load_episodes",
+    "input_dim",
+    "label_dim",
     "load_checkpoint",
+    "load_episodes",
     "save_checkpoint",
-    "StudentPolicy",
 ]

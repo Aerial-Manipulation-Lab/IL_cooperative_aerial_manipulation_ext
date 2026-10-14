@@ -30,7 +30,7 @@ parser.add_argument("--seed", type=int, default=0, help="Seed for the split and 
 parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--batch_size", type=int, default=4096)
 parser.add_argument("--lr", type=float, default=1e-3)
-parser.add_argument("--model", choices=["pin", "mlp"], default="pin", help="Student network, see build_model.")
+parser.add_argument("--model", choices=["mlp"], default="mlp", help="Student network, see build_model.")
 parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
 parser.add_argument("--log_dir", type=str, default="logs/bc")
 parser.add_argument("--run_name", type=str, default=None, help="Defaults to a timestamp.")
@@ -53,14 +53,14 @@ def split(episodes, val_frac, seed):
 
 
 @torch.no_grad()
-def evaluate(model, x, y, spec, batch_size):
+def evaluate(model, x, y, num_nodes, batch_size):
     """Validation loss (MSE) and errors, in physical units."""
-    loss, sq_err = 0.0, torch.zeros(spec.num_nodes, PLAN_DIM, device=x.device)
+    loss, sq_err = 0.0, torch.zeros(num_nodes, PLAN_DIM, device=x.device)
     for i in range(0, len(x), batch_size):
         xb, yb = x[i : i + batch_size], y[i : i + batch_size]
         pred = model(xb)
         loss += torch.nn.functional.mse_loss(pred, yb, reduction="sum").item()
-        sq_err += ((pred - yb) ** 2).reshape(-1, spec.num_nodes, PLAN_DIM).sum(0)
+        sq_err += ((pred - yb) ** 2).reshape(-1, num_nodes, PLAN_DIM).sum(0)
     rmse = (sq_err / len(x)).sqrt()
 
     def vec(node, part):
@@ -84,16 +84,16 @@ def main():
     run_dir = os.path.abspath(os.path.join(args.log_dir, run_name))
     os.makedirs(run_dir, exist_ok=True)
 
-    episodes, spec = load_episodes(args.datasets)
+    episodes, meta = load_episodes(args.datasets)
     x_train, y_train, x_val, y_val = (t.to(args.device) for t in split(episodes, args.val_frac, args.seed))
     del episodes
     print(
         f"[INFO]: {len(x_train)} train / {len(x_val)} val samples, "
-        f"input {spec.input_dim}, label {spec.label_dim} ({spec.num_nodes} nodes x {PLAN_DIM})"
+        f"input {x_train.shape[-1]}, label {y_train.shape[-1]} ({meta['num_nodes']} nodes x {PLAN_DIM})"
     )
 
     loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
-    model = build_model(spec, args.model).to(args.device)
+    model = build_model(meta, args.model).to(args.device)
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.5, patience=5)
 
@@ -116,7 +116,7 @@ def main():
             train_loss += loss.item() * len(xb)
 
         model.eval()
-        metrics = evaluate(model, x_val, y_val, spec, args.batch_size)
+        metrics = evaluate(model, x_val, y_val, meta["num_nodes"], args.batch_size)
         metrics["train/loss"] = train_loss / len(x_train)
         metrics["lr"] = optimiser.param_groups[0]["lr"]
         scheduler.step(metrics["val/loss"])
@@ -124,10 +124,10 @@ def main():
             writer.add_scalar(key, value, epoch)
 
         extra = {"epoch": epoch, "metrics": metrics, "train_args": vars(args)}
-        save_checkpoint(os.path.join(run_dir, "last.pt"), model, spec, **extra)
+        save_checkpoint(os.path.join(run_dir, "last.pt"), model, meta, **extra)
         if metrics["val/loss"] < best:
             best = metrics["val/loss"]
-            save_checkpoint(os.path.join(run_dir, "best.pt"), model, spec, **extra)
+            save_checkpoint(os.path.join(run_dir, "best.pt"), model, meta, **extra)
         print(
             f"[{epoch:3d}] train {metrics['train/loss']:.4f}  val {metrics['val/loss']:.4f}  "
             f"node1 pos {metrics['val/node1_pos_cm']:.2f} cm  vel {metrics['val/node1_vel_mps']:.3f} m/s  "
