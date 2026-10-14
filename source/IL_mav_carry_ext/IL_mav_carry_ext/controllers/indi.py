@@ -53,9 +53,6 @@ class IndiController:
         self.rope_offset = -0.03
         self.p_offset = torch.tensor([[0.0, 0.0, self.rope_offset]] * self.num_envs, device=self.device)
 
-        # TODO REMOVE
-        # self.kp = torch.tensor([100.0, 100.0, 10.0], device=self.device)
-
         # low pass filters
         self.filter_sampling_frequency = torch.full(
             (self.num_envs, 1), 300.0, device=self.device
@@ -124,53 +121,6 @@ class IndiController:
 
         return rotor_speeds
 
-    # def getCommand(
-    #     self,
-    #     state: dict,
-    #     actions: torch.tensor,
-    #     setpoint: dict,
-    # ) -> torch.tensor:
-    #     forces = actions.sum(-1)
-    #     # filtered_forces = self.filterMot_.add(forces)
-    #     # self.filterRate_.add(state["ang_vel"])
-    #     # ang_acc_filtered = self.filterRate_.derivative()
-
-    #     # if self.debug:
-    #     #     self.filtered_ang_acc = ang_acc_filtered
-    #     #     self.unfiltered_mot = forces
-    #     #     self.filtered_mot = filtered_forces
-
-    #     omega = quat_apply(quat_inv(state["quat"]), state["ang_vel"])  # body rates # normally from IMU
-    #     alpha_cmd = self.kp * (setpoint["body_rates"] - omega)
-    #     acc_cmd = setpoint["cthrust"]
-    #     omega_dot = quat_apply(
-    #         quat_inv(state["quat"]), state["ang_acc"]
-    #     )  # body accelerations # normally from derivative filtered body rate
-    #     tau = torch.matmul(self.G_1, forces.transpose(0, 1)).transpose(0, 1)[:, 1:]  # torque commands
-    #     mu = torch.zeros((self.num_envs, 4), device=self.device)
-    #     # collective_thrust_des_magntiude = torch.norm(acc_cmd, dim=1) * self.falcon_mass
-    #     collective_thrust_des_magntiude = acc_cmd * self.falcon_mass
-    #     mu[:, 0] = torch.clamp(collective_thrust_des_magntiude, self.thrust_min_collective, self.thrust_max_collective)
-    #     mu_ndi = mu
-
-    #     moments = self.inertia_mat.matmul(alpha_cmd.transpose(0, 1)).transpose(0, 1) + torch.linalg.cross(
-    #         omega, self.inertia_mat.matmul(omega.transpose(0, 1)).transpose(0, 1)
-    #     )  # - torch.linalg.cross(
-    #     # self.p_offset, quat_apply(quat_inv(state["quat"]), acc_load * self.falcon_mass)) # M_load in body frame
-
-    #     mu_ndi[:, 1:] = moments
-    #     mu[:, 1:] = tau + self.inertia_mat.matmul((alpha_cmd - omega_dot).transpose(0, 1)).transpose(0, 1)
-
-    #     # without heading control
-    #     mu[:, 3] = mu_ndi[:, 3]
-    #     thrusts = self.G_1_inv.matmul(mu.transpose(0, 1))
-    #     thrusts = torch.clamp(thrusts, self.thrust_min, self.thrust_max)
-
-    #     rotor_speeds = torch.sqrt(thrusts / self.thrust_map[0]).transpose(0, 1)
-
-    #     return rotor_speeds
-
     def reset(self, env_ids):
         self.filterMot_.reset(env_ids)
         self.filterRate_.reset(env_ids)
-        # pass

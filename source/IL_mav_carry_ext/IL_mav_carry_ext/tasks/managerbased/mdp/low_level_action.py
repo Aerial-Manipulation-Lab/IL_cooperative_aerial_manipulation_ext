@@ -268,10 +268,6 @@ class LowLevelAction(ActionTerm):
         # apply forces to each rotor
         robot.permanent_wrench_composer.add_forces_and_torques(forces=self._forces, body_ids=self._body_ids)
 
-    """
-    visualizations
-    """
-
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers
         # note: parent only deals with callbacks. not their visibility

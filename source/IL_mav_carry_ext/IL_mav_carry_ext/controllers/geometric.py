@@ -179,26 +179,9 @@ class GeometricController:
             + self.kp_rate * (omega_b_ref - ang_vel_body)
         )
 
-        # omega = quat_apply(quat_inv(state["quat"]), state["ang_vel"])  # body rates # normally from IMU
-        # mu_ndi = torch.zeros((self.num_envs, 4), device=self.device)
-        # collective_thrust_des_magntiude = torch.norm(acc_cmd, dim=1) * self.falcon_mass
-        # mu_ndi[:, 0] = torch.clamp(collective_thrust_des_magntiude, self.thrust_min_collective, self.thrust_max_collective)
-
-        # moments = self.inertia_mat.matmul(alpha_b_des.transpose(0, 1)).transpose(0, 1) + torch.linalg.cross(
-        #     omega, self.inertia_mat.matmul(omega.transpose(0, 1)).transpose(0, 1)
-        # ) - torch.linalg.cross(
-        # self.p_offset, quat_apply(quat_inv(state["quat"]), acc_load * self.falcon_mass)) # M_load in body frame
-
-        # mu_ndi[:, 1:] = moments
-        # thrusts = self.G_1_inv.matmul(mu_ndi.transpose(0, 1))
-        # thrusts = torch.clamp(thrusts, self.thrust_min, self.thrust_max)
-
-        # rotor_speeds = torch.sqrt(thrusts / self.thrust_map[0]).transpose(0, 1)
-
         return alpha_b_des, acc_load, acc_cmd, q_cmd  # , rotor_speeds
 
     def reset(self, env_ids):
         self.filterAcc_.reset(env_ids)
         self.filterMot_.reset(env_ids)
         self.filterRate_.reset(env_ids)
-        # pass

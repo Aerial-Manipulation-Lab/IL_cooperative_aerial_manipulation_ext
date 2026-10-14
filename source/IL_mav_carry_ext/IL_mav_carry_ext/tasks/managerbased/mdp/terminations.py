@@ -7,11 +7,6 @@ from isaaclab.utils.math import euler_xyz_from_quat, quat_inv, quat_mul
 from .utils import get_drone_pdist, get_drone_rpos
 
 # Body indices found in the scene
-# payload_idx = [1]
-# drone_idx = [71, 72, 73]
-# base_rope_idx = [8, 9, 10]
-# top_rope_idx = [62, 63, 64]
-
 # for the case when the rod is used
 payload_idx = [1]
 drone_idx = [20, 27, 34]
@@ -30,17 +25,6 @@ def falcon_fly_low(
     return is_falcon_pos_low
 
 
-def falcon_spin(
-    env: ManagerBasedRLEnv, threshold: float = 0.1, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Terminate when the falcon spins too fast."""
-    robot = env.scene[asset_cfg.name]
-    falcon_ang_vel = robot.data.body_com_state_w.torch[:, drone_idx, 10:].reshape(env.scene.num_envs, -1)
-    is_falcon_spin = (falcon_ang_vel > threshold).any(dim=1)
-    assert is_falcon_spin.shape == (env.num_envs,)
-    return is_falcon_spin
-
-
 def payload_fly_low(
     env: ManagerBasedRLEnv, threshold: float = 0.1, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -50,30 +34,6 @@ def payload_fly_low(
     is_payload_low = payload_pos[:, 2] < threshold
     assert is_payload_low.shape == (env.num_envs,)
     return is_payload_low
-
-
-def payload_spin(
-    env: ManagerBasedRLEnv, threshold: float = 0.1, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Terminate when the payload spins too fast."""
-    robot = env.scene[asset_cfg.name]
-    payload_ang_vel = robot.data.body_com_state_w.torch[:, payload_idx, 10:].squeeze(1)
-    is_payload_spin = (payload_ang_vel > threshold).any(dim=1)
-    assert is_payload_spin.shape == (env.num_envs,)
-    return is_payload_spin
-
-
-def payload_angle_cos(
-    env: ManagerBasedRLEnv, threshold: float = 0.1, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Terminate when the payload angle is too large."""
-    robot = env.scene[asset_cfg.name]
-    payload_quat = robot.data.body_com_state_w.torch[:, payload_idx, 3:7].squeeze(1)
-    roll, pitch, _yaw = euler_xyz_from_quat(payload_quat)  # yaw can be whatever
-    mapped_angle = torch.stack((torch.cos(roll), torch.cos(pitch)), dim=1)
-    is_angle_limit = (mapped_angle < threshold).any(dim=1)
-    assert is_angle_limit.shape == (env.num_envs,)
-    return is_angle_limit
 
 
 def cable_angle_drones_cos(
@@ -122,34 +82,6 @@ def bounding_box(
     is_body_pos_outside = (body_pos_env.abs() > threshold).any(dim=-1).any(dim=-1)
     assert is_body_pos_outside.shape == (env.num_envs,)
     return is_body_pos_outside
-
-
-def large_states(
-    env: ManagerBasedRLEnv, threshold: float = 1e3, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Terminate when any body states are too large."""
-    robot = env.scene[asset_cfg.name]
-    body_idx = robot.find_bodies(".*")[0]
-    body_states = robot.data.body_com_state_w.torch[:, body_idx, :]
-    is_large_states = (body_states.abs() > threshold).any(dim=-1).any(dim=-1)
-    assert is_large_states.shape == (env.num_envs,)
-    return is_large_states
-
-
-def nan_obs(env: ManagerBasedRLEnv, group_name: str) -> torch.Tensor:
-    """Terminate when any observation is NaN."""
-    if hasattr(env, "obs_buf"):
-        obs = env.obs_buf
-        if obs:  # prevent error when obs is empty dict
-            is_nan_obs = torch.isnan(obs[group_name]).any(dim=-1)
-            assert is_nan_obs.shape == (env.num_envs,)
-            return is_nan_obs
-        else:
-            is_nan_obs = torch.tensor([False] * env.num_envs, device=env.sim.device)
-            assert is_nan_obs.shape == (env.num_envs,)
-            return is_nan_obs
-    else:
-        return torch.tensor([False] * env.num_envs, device=env.sim.device)
 
 
 def drone_collision(
@@ -225,28 +157,6 @@ def cable_collision(
 
     assert is_cable_collision.shape == (env.num_envs,)
     return is_cable_collision
-
-
-def payload_target_distance(
-    env: ManagerBasedRLEnv, threshold: float, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Terminate when the payload is outside a certain distance of the target."""
-    robot = env.scene[asset_cfg.name]
-    payload_pos_world = robot.data.body_com_state_w.torch[:, payload_idx, :3].squeeze(1)
-    payload_pos_env = payload_pos_world - env.scene.env_origins
-
-    desired_pos = env.command_manager.get_command(command_name)[..., :3]
-
-    # for the trajectory case
-    if len(desired_pos.shape) > 2:
-        desired_pos = desired_pos[:, 0]
-
-    target_rpos = desired_pos - payload_pos_env
-    dist = target_rpos.norm(dim=-1)
-    is_target_far = dist > threshold
-
-    assert is_target_far.shape == (env.num_envs,)
-    return is_target_far
 
 
 def mpc_failed(env: ManagerBasedRLEnv, command_name: str = "pose_command") -> torch.Tensor:
