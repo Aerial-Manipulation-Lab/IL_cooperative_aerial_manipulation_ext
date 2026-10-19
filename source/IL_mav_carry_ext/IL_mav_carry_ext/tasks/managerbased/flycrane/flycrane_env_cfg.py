@@ -139,7 +139,7 @@ class ObservationsCfg:
         The payload terms are the same for every drone, the drone terms and the reference each drone's
         own, and the attach point tells the drones apart. No noise on the reference: it is a command, not
         a measurement. The payload's position enters nowhere: the reference is relative to the drone, and
-        where the drone sits relative to the payload only follows from its cable direction.
+        with no cable direction either, nothing says where the drone sits relative to the payload.
         """
 
         payload_orientation = ObsTerm(
@@ -156,7 +156,6 @@ class ObservationsCfg:
         drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
         drone_linear_velocities = ObsTerm(func=mdp.drone_linear_velocities, noise=Gnoise(std=0.01))
         drone_angular_velocities = ObsTerm(func=mdp.drone_angular_velocities, noise=Gnoise(std=0.02))
-        drone_cable_dir = ObsTerm(func=mdp.drone_cable_dir, noise=Gnoise(std=0.01))
         drone_attach_point = ObsTerm(func=mdp.drone_attach_point)
 
         def __post_init__(self):
