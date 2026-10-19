@@ -3,8 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Everything around the student, shared by the scripts: the rows' layout, building, saving and loading
-the student, its loss, and the recorded datasets."""
+"""Everything around the student, shared by the scripts: building, saving and loading the student, its
+loss, and the recorded datasets."""
 
 import json
 import os
@@ -12,51 +12,39 @@ import os
 import h5py
 import torch
 
-from .model import BCPolicy
-
-PLAN_DIM = 12
-"""Per plan node: p(3), v(3), a(3), w(3)."""
+from .features import PLAN_DIM, PLAN_PARTS, FeatureSpec
+from .models import BCPolicy
 
 
-def input_dim(meta: dict) -> int:
-    """Width of one drone's row of the policy group, from `dataset_metadata`."""
-    return sum(term["dim"] for term in meta["policy_terms"])
-
-
-def label_dim(meta: dict) -> int:
-    """Width of one drone's row of the label group, from `dataset_metadata`."""
-    return meta["num_nodes"] * PLAN_DIM
-
-
-def build_model(meta: dict, name: str) -> BCPolicy:
-    """An untrained student for the policy rows `meta` describes."""
+def build_model(spec: FeatureSpec, name: str) -> BCPolicy:
+    """An untrained student for the rows `spec` describes."""
     if name == "mlp":
-        return BCPolicy(input_dim(meta), label_dim(meta), hidden=(256, 256, 256))
+        return BCPolicy(spec.input_dim, spec.label_dim, hidden=(256, 256, 256))
     raise ValueError(f"unknown student {name!r}")
 
 
-def save_checkpoint(path, model: BCPolicy, meta: dict, **extra):
+def save_checkpoint(path, model: BCPolicy, spec: FeatureSpec, **extra):
     """Everything needed to fly the student without the training script."""
     torch.save(
         {
             "model": type(model).__name__,
             "model_cfg": model.cfg,
             "state_dict": model.state_dict(),
-            "meta": meta,
+            "meta": spec.to_dict(),
             **extra,
         },
         path,
     )
 
 
-def load_checkpoint(path, device="cpu") -> tuple[BCPolicy, dict, dict]:
-    """(model, the policy rows' metadata, the whole checkpoint dict) from `save_checkpoint`."""
+def load_checkpoint(path, device="cpu") -> tuple[BCPolicy, FeatureSpec, dict]:
+    """(model, the rows it was trained on, the whole checkpoint dict) from `save_checkpoint`."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt["model_cfg"]
     model = BCPolicy(cfg["input_dim"], cfg["label_dim"], tuple(cfg["hidden"])).to(device)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-    return model, ckpt["meta"], ckpt
+    return model, FeatureSpec.from_dict(ckpt["meta"]), ckpt
 
 
 def bc_loss(model, inputs: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -114,7 +102,7 @@ def evaluate(model, x: torch.Tensor, y: torch.Tensor, batch_size: int = 4096) ->
     def vec(node, part):
         return float(rmse[node, part].norm())
 
-    p, v, a, w = slice(0, 3), slice(3, 6), slice(6, 9), slice(9, 12)
+    p, v, a, w = PLAN_PARTS.values()
     return {
         "val_loss": loss / y.numel(),
         "node1_pos_err_cm": 100 * vec(1, p),
@@ -126,21 +114,21 @@ def evaluate(model, x: torch.Tensor, y: torch.Tensor, batch_size: int = 4096) ->
     }
 
 
-def load_episodes(paths: list[str]) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], dict]:
-    """(policy rows, label rows) per episode over all files, as (steps, num_drones, dim) CPU tensors, and the metadata.
+def load_episodes(paths: list[str]) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], FeatureSpec]:
+    """(policy rows, label rows) per episode over all files, as (steps, num_drones, dim) CPU tensors, and their spec.
 
     Every step whose solve succeeded is kept, also from episodes that ended early: under DAgger those
     are where the student crashed. Episodes without steps (reset again right after a reset) are skipped.
     """
-    meta, episodes = None, []
+    spec, episodes = None, []
     for path in paths:
         stem = os.path.splitext(path)[0]
         with open(stem + ".meta.json") as f:
-            file_meta = json.load(f)
-        if meta is None:
-            meta = file_meta
-        elif file_meta["policy_terms"] != meta["policy_terms"]:
-            raise ValueError(f"{stem}: policy terms differ from {paths[0]}")
+            file_spec = FeatureSpec.from_dict(json.load(f))
+        if spec is None:
+            spec = file_spec
+        elif file_spec != spec:
+            raise ValueError(f"{stem}: its rows differ from {paths[0]}'s")
         with h5py.File(stem + ".hdf5", "r") as f:
             for ep in f["data"].values():
                 if ep.attrs["num_samples"] == 0:
@@ -149,4 +137,4 @@ def load_episodes(paths: list[str]) -> tuple[list[tuple[torch.Tensor, torch.Tens
                 obs = torch.as_tensor(ep["obs"][()][ok], dtype=torch.float32)
                 label = torch.as_tensor(ep["label"][()][ok], dtype=torch.float32)
                 episodes.append((obs, label))
-    return episodes, meta
+    return episodes, spec

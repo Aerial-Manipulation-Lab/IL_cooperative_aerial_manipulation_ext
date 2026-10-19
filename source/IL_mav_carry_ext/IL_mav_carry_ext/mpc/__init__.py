@@ -6,7 +6,7 @@
 """NMPC teacher plumbing for the flycrane tasks."""
 
 from ..plants import FLYCRANE, FLYCRANE_SIM
-from .recorders import MpcRecorderManagerCfg, dataset_metadata
+from .recorders import MpcRecorderManagerCfg
 from .teacher import MpcTeacher
 
 __all__ = [
@@ -14,5 +14,4 @@ __all__ = [
     "FLYCRANE_SIM",
     "MpcRecorderManagerCfg",
     "MpcTeacher",
-    "dataset_metadata",
 ]

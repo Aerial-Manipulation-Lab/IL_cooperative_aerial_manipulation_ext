@@ -9,7 +9,7 @@ Example, from the repo root:
 
     ./docker/dev.sh run --rm isaac bash -c '$ISAAC_PY \
         IL_cooperative_aerial_manipulation_ext/scripts/record.py \
-        --headless --task Flycrane-ApproachPose-v0 --num_envs 8 --num_episodes 200 --output datasets/mpc_demos'
+        --headless --task Flycrane-ApproachPose-v0 --num_envs 8 --num_episodes 200 --output logs/record/mpc_demos'
 """
 
 import argparse
@@ -28,7 +28,7 @@ parser.add_argument("--num_episodes", type=int, default=200, help="Stop once thi
 parser.add_argument(
     "--output",
     type=str,
-    default="datasets/mpc_demos",
+    default="logs/record/mpc_demos",
     help="Dataset path without extension; .hdf5 and .meta.json are added.",
 )
 parser.add_argument("--seed", type=int, default=0, help="Env seed; use a different one per run to merge.")
@@ -56,7 +56,8 @@ import math
 import time
 
 import torch
-from IL_mav_carry_ext.mpc import MpcRecorderManagerCfg, dataset_metadata
+from IL_mav_carry_ext.imitation import FeatureSpec
+from IL_mav_carry_ext.mpc import MpcRecorderManagerCfg
 from IL_mav_carry_ext.reporting import Heartbeat, TextReporter, episode_numbers
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
@@ -77,10 +78,8 @@ def main():
     env = ManagerBasedRLEnv(cfg=env_cfg)
     recorder = env.recorder_manager
 
-    meta = dataset_metadata(env)
-    meta.update(seed=args_cli.seed, num_envs=args_cli.num_envs)
     with open(output + ".meta.json", "w") as f:
-        json.dump(meta, f, indent=2)
+        json.dump(FeatureSpec.from_env(env).to_dict(), f, indent=2)
 
     def written():
         return recorder.exported_successful_episode_count + recorder.exported_failed_episode_count
@@ -110,7 +109,7 @@ def main():
                 {
                     "step": steps,
                     "episode_time_s": float(env.episode_length_buf.float().mean()) * env.step_dt,
-                    "env_steps_per_s": steps * env.num_envs / elapsed,
+                    "env_step_rate_hz": steps * env.num_envs / elapsed,
                     "written": written(),
                     "eta_min": elapsed / steps * max(total_steps - steps, 0) / 60,
                 },

@@ -4,12 +4,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 
-class TextReporter:
-    """One script's console output: status lines `[tag] ...` and metric lines `[tag label] name value | ...`.
+UNITS = {
+    "_mps2": "m/s2",
+    "_mps": "m/s",
+    "_radps": "rad/s",
+    "_hz": "Hz",
+    "_deg": "deg",
+    "_cm": "cm",
+    "_min": "min",
+    "_m": "m",
+    "_s": "s",
+}
+"""Metric-name endings and the units they print as."""
 
-    Every number is formatted here, by one rule, so no script formats one itself: the unit is in its
-    name, a `_share` prints as a percentage, other floats with 3 significant digits (no decimals from
-    100 up), integers and flags as they are.
+
+class TextReporter:
+    """One script's console output: status lines `[tag] ...` and metric lines `[tag label] name value unit | ...`.
+
+    Every metric is formatted here, by one rule, so no script formats one itself: the unit comes off the
+    end of its name and goes after the value, underscores print as spaces, a `_share` prints as a
+    percentage, other floats with 3 significant digits (no decimals from 100 up), integers and flags as
+    they are.
     """
 
     def __init__(self, tag: str):
@@ -19,8 +34,18 @@ class TextReporter:
         print(f"[{self.tag}] {message}", flush=True)
 
     def metrics(self, label: str, metrics: dict):
-        line = " | ".join(f"{name} {format_value(name, value)}" for name, value in metrics.items())
+        line = " | ".join(format_metric(name, value) for name, value in metrics.items())
         print(f"[{self.tag} {label}] {line}", flush=True)
+
+
+def format_metric(name: str, value) -> str:
+    """One metric as `TextReporter` prints it: `name value unit`."""
+    text = format_value(name, value)
+    for ending, unit in UNITS.items():
+        if name.endswith(ending):
+            name, text = name[: -len(ending)], f"{text} {unit}"
+            break
+    return f"{name.replace('_', ' ')} {text}"
 
 
 def format_value(name: str, value) -> str:

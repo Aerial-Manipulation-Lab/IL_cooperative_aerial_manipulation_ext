@@ -27,8 +27,6 @@ from isaaclab.managers.recorder_manager import (
 )
 from isaaclab.utils.configclass import configclass
 
-from ..tasks.managerbased.mdp.observations import REF_HORIZON_OFFSETS
-
 
 def teacher_of(env):
     return env.command_manager.get_term("pose_command").teacher
@@ -81,7 +79,7 @@ class MpcRecorderManagerCfg(RecorderManagerBaseCfg):
     """Everything one NMPC demonstration dataset holds, per step unless noted.
 
     - `obs`: the policy group, the student's input, one row per drone;
-      `dataset_metadata` says which columns are which term.
+      the `FeatureSpec` in the dataset's meta.json says which columns are which term.
     - `label`: the label group, each drone's teacher plan in its own frame.
     - `teacher_load_plan`: the payload pose that plan predicts, per node.
     - `teacher_tension`: the cable tensions the teacher assumed; `rope_force`: what the sim's ropes pull with.
@@ -104,21 +102,3 @@ class MpcRecorderManagerCfg(RecorderManagerBaseCfg):
     record_mpc_ok = RecorderTermCfg(class_type=MpcOkRecorder)
 
     dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_ALL
-
-
-def dataset_metadata(env) -> dict:
-    """What a loader needs to read a dataset, as JSON-ready builtins: the policy group's terms in
-    order, with their width per drone, and the times of the plan's nodes."""
-    manager = env.observation_manager
-    teacher = teacher_of(env)
-    return {
-        "policy_terms": [
-            {"name": name, "dim": int(dims[-1])}
-            for name, dims in zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=True)
-        ],
-        "num_drones": teacher.num_drones,
-        "num_nodes": teacher.num_nodes,
-        "node_offsets_s": [float(t) for t in REF_HORIZON_OFFSETS],
-        "step_dt": float(env.step_dt),
-        "episode_length_s": float(env.cfg.episode_length_s),
-    }

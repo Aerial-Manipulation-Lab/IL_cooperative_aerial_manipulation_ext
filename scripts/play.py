@@ -52,7 +52,7 @@ from datetime import datetime
 
 import gymnasium as gym
 import torch
-from IL_mav_carry_ext.imitation import load_checkpoint
+from IL_mav_carry_ext.imitation import FeatureSpec, load_checkpoint
 from IL_mav_carry_ext.reporting import Heartbeat, TextReporter, episode_numbers
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
@@ -87,7 +87,11 @@ def main():
             video_length=args_cli.video_length,
             disable_logger=True,
         )
-    student = None if args_cli.teacher else load_checkpoint(args_cli.checkpoint, base.device)[0]
+    student = None
+    if not args_cli.teacher:
+        student, spec, _ = load_checkpoint(args_cli.checkpoint, base.device)
+        if spec != FeatureSpec.from_env(base):
+            raise ValueError(f"{args_cli.checkpoint} was trained on other rows than {args_cli.task} gives")
 
     n = base.num_envs
     done = torch.zeros(n, dtype=torch.bool, device=base.device)

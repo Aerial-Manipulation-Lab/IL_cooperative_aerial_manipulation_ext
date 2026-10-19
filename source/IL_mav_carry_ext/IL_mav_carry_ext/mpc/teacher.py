@@ -21,7 +21,8 @@ from ..plants import FLYCRANE_SIM, ROPE_END
 class MpcTeacher:
     """One NMPC per env, owned by the pose command term. After `solve`:
 
-    - `plan`: (num_envs, num_drones, num_nodes, 12), each drone's p, v, a, w per node, env frame.
+    - `plan`: (num_envs, num_drones, num_nodes, 12), each drone's p, v, a, w per node, env frame; the nodes
+      are `node_offsets_s` ahead of now.
     - `ok`: (num_envs,) bool, False where the last solve failed.
     - `load_plan`: (num_envs, num_nodes, 7), the payload pose the last solve predicts: p, then q (XYZW).
     - `tension`: (num_envs, num_drones), the cable tensions the last solve started from, carried, never measured.
@@ -39,6 +40,7 @@ class MpcTeacher:
         self.num_envs = env.num_envs
         self.num_drones = plant.num_drones
         self.num_nodes = self.policies[0].horizon.num_nodes
+        self.node_offsets_s = self.policies[0].horizon.shooting_nodes
         self.robot = env.scene["robot"]
         self.load_idx = self.robot.find_bodies("load_odometry_sensor_link")[0][0]
         self.falcon_idx = self.robot.find_bodies("Falcon.*_base_link_inertia")[0]

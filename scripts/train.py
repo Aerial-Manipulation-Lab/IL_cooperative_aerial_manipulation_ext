@@ -8,7 +8,7 @@
 Example, from the repo root:
 
     ./docker/dev.sh run --rm isaac bash -c '$ISAAC_PY \
-        IL_cooperative_aerial_manipulation_ext/scripts/train.py datasets/mpc_demos'
+        IL_cooperative_aerial_manipulation_ext/scripts/train.py logs/record/mpc_demos'
 """
 
 import argparse
@@ -58,16 +58,16 @@ def main():
     run_dir = os.path.abspath(os.path.join(args.log_dir, run_name))
     os.makedirs(run_dir, exist_ok=True)
 
-    episodes, meta = load_episodes(args.datasets)
+    episodes, spec = load_episodes(args.datasets)
     report.info(f"loaded {len(episodes)} episodes from {len(args.datasets)} datasets")
     x_train, y_train, x_val, y_val = (t.to(args.device) for t in split(episodes, args.val_frac, args.seed))
     del episodes
     report.info(
         f"{len(x_train)} train / {len(x_val)} val samples, "
-        f"input {x_train.shape[-1]}, label {y_train.shape[-1]} ({meta['num_nodes']} nodes x {PLAN_DIM})"
+        f"input {x_train.shape[-1]}, label {y_train.shape[-1]} ({spec.num_nodes} nodes x {PLAN_DIM})"
     )
 
-    model = build_model(meta, args.model).to(args.device)
+    model = build_model(spec, args.model).to(args.device)
     bc = BehaviourCloning(model, (x_train, y_train), (x_val, y_val), args.lr, args.batch_size)
 
     config = {**vars(args), "run_name": run_name, "train_samples": len(x_train), "val_samples": len(x_val)}
@@ -84,10 +84,10 @@ def main():
         tensorboard.metrics(metrics, epoch)
 
         extra = {"epoch": epoch, "metrics": metrics, "train_args": vars(args)}
-        save_checkpoint(os.path.join(run_dir, "last.pt"), model, meta, **extra)
+        save_checkpoint(os.path.join(run_dir, "last.pt"), model, spec, **extra)
         if metrics["val_loss"] < best:
             best = metrics["val_loss"]
-            save_checkpoint(os.path.join(run_dir, "best.pt"), model, meta, **extra)
+            save_checkpoint(os.path.join(run_dir, "best.pt"), model, spec, **extra)
 
     tensorboard.close()
     report.metrics("done", {"best_val_loss": best})

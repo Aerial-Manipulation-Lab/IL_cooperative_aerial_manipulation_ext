@@ -38,7 +38,7 @@ simulation_app = app_launcher.app
 
 import isaaclab.sim as sim_utils
 import torch
-from IL_mav_carry_ext.imitation import load_checkpoint
+from IL_mav_carry_ext.imitation import FeatureSpec, load_checkpoint
 from IL_mav_carry_ext.reporting import TextReporter, episode_numbers
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.sim import SimulationContext
@@ -55,7 +55,7 @@ TASKS = [
 
 def main():
     report = TextReporter("validate")
-    student = None if args_cli.teacher else load_checkpoint(args_cli.checkpoint, args_cli.device)[0]
+    student, spec = (None, None) if args_cli.teacher else load_checkpoint(args_cli.checkpoint, args_cli.device)[:2]
     results = {}
     for task in TASKS:
         if not simulation_app.is_running():
@@ -67,6 +67,8 @@ def main():
         env_cfg.terminations.mpc_failed = None
         env_cfg.commands.pose_command.solve_teacher = args_cli.teacher
         env = ManagerBasedRLEnv(cfg=env_cfg)
+        if spec is not None and spec != FeatureSpec.from_env(env):
+            raise ValueError(f"{args_cli.checkpoint} was trained on other rows than {task} gives")
 
         n = env.num_envs
         done = torch.zeros(n, dtype=torch.bool, device=env.device)
