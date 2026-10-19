@@ -136,9 +136,10 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """The uniform student's input: (num_envs, num_drones, input_dim), one row per drone.
 
-        The payload terms and the reference are the same for every drone, the drone terms are each
-        drone's own, and the attach point tells the drones apart. No noise on the reference: it is a
-        command, not a measurement.
+        The payload terms are the same for every drone, the drone terms and the reference each drone's
+        own, and the attach point tells the drones apart. No noise on the reference: it is a command, not
+        a measurement. The payload's position enters nowhere: the reference is relative to the drone, and
+        where the drone sits relative to the payload only follows from its cable direction.
         """
 
         payload_orientation = ObsTerm(
@@ -150,12 +151,8 @@ class ObservationsCfg:
         payload_angular_velocities = ObsTerm(
             func=mdp.copy_to_each_drone, params={"term": mdp.payload_angular_velocities}, noise=Gnoise(std=0.02)
         )
-        payload_ref_horizon = ObsTerm(
-            func=mdp.copy_to_each_drone,
-            params={"term": mdp.payload_ref_horizon, "params": {"command_name": "pose_command"}},
-        )
+        drone_ref_horizon = ObsTerm(func=mdp.drone_ref_horizon, params={"command_name": "pose_command"})
 
-        drone_pos_rel_payload = ObsTerm(func=mdp.payload_drone_rpos, noise=Gnoise(std=0.003))
         drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
         drone_linear_velocities = ObsTerm(func=mdp.drone_linear_velocities, noise=Gnoise(std=0.01))
         drone_angular_velocities = ObsTerm(func=mdp.drone_angular_velocities, noise=Gnoise(std=0.02))

@@ -150,6 +150,18 @@ def payload_ref_horizon(
     return ref.view(env.num_envs, -1)
 
 
+def drone_ref_horizon(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """`payload_ref_horizon` with each node's position relative to the drone instead of the payload, so the
+    payload's position enters nowhere: (num_envs, num_drones, num_nodes * 18)."""
+    ref = payload_ref_horizon(env, command_name, asset_cfg).view(env.num_envs, 1, len(REF_HORIZON_OFFSETS), 18)
+    ref = ref.repeat(1, len(drone_idx), 1, 1)
+    # reference - drone = (reference - payload) - (drone - payload)
+    ref[..., :3] -= payload_drone_rpos(env, asset_cfg)[:, :, None]
+    return ref.flatten(2)
+
+
 # The uniform student's input and label, one row per drone
 
 
