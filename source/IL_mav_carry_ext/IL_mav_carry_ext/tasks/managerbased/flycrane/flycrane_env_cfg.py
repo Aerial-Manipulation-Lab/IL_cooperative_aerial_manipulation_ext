@@ -16,7 +16,7 @@ from isaaclab.utils.configclass import (
     configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 )
 from isaaclab.utils.noise import GaussianNoiseCfg
-from python_mpc_cusadi import Circle, Square
+from python_mpc_cusadi import Circle, FigureEight, Square
 
 import IL_mav_carry_ext.tasks.managerbased.mdp as mdp
 from IL_mav_carry_ext.assets import FLYCRANE_CFG
@@ -71,19 +71,45 @@ class ApproachPoseCommandsCfg:
     )
 
 
+# Every reference a student is checked on, by name. Each task below flies one of them, validation all at once.
+# The ladder is the agility levels of Sun et al. 2025 (Table 1, Table S1), whose NMPC our teacher is: x = A cos(w s),
+# y = B sin(2 w s), yawing at 0.25 rad/s, a lap per 2 pi / w of the clock. Peaks below are on our clock; the paper's
+# simulated NMPC tracked them to 0.031, 0.067, 0.062 and 0.152 m. The thesis's a2 CSV was Medium, its a4 Medium Plus
+# with A 1.25 m.
+VALIDATION = {
+    # the training walk: Medium Plus's 1.2 m to Slow's and Medium's 2.7, below Slow's 0.5 m/s^2 to past Medium Plus's
+    # 4.1 (Fast's 8.2 stays unseen), from a fixed heading, as the circle's, past the ladder's steady 0.25 rad/s
+    "RandomTrajectory": mdp.RandomWalk(size=(1.0, 3.0), acceleration=(0.3, 4.5), yaw_rate=(0.0, 0.5)),
+    # Medium Plus's size to Medium's, Slow's 0.5 m/s^2 to past Medium Plus's 4.1, both ways round
+    "FigureEight": mdp.RandomFigureEight(amplitude=(1.0, 2.5), acceleration=(0.5, 4.5), yaw_rate=(-0.3, 0.3)),
+    "Slow": FigureEight(amplitude=2.5, aspect=0.8, period=8 * math.pi),
+    "Medium": FigureEight(amplitude=2.5, aspect=0.8, period=4 * math.pi),
+    "MediumPlus": FigureEight(amplitude=1.0, aspect=1.0, period=2 * math.pi),
+    "Fast": FigureEight(amplitude=2.5, aspect=0.8, period=2 * math.pi),
+    "Circle": Circle(),
+    "Square": Square(),
+}
+
+
+# Random walks around Sun's Medium, Medium Plus and Fast levels (size v^2/a and peak acceleration within about 20% of
+# each), one band per env, round robin: with a multiple of 3 envs, equal shares. Offline (2026-10-19) they peak at
+# 2.2 / 2.4 / 4.6 m/s and 1.9 / 4.3 / 8.4 m/s^2, the own-model teacher flying the hard ends with up to 20 N of thrust.
+WALKS_MEDIUM_TO_FAST = (
+    mdp.RandomWalk(size=(2.2, 3.0), acceleration=(1.6, 2.5), yaw_rate=(0.0, 0.5)),  # Medium: 2.7 m, 2.05 m/s^2
+    mdp.RandomWalk(size=(1.0, 1.5), acceleration=(3.3, 4.9), yaw_rate=(0.0, 0.5)),  # Medium Plus: 1.2 m, 4.1 m/s^2
+    mdp.RandomWalk(size=(2.2, 3.0), acceleration=(6.6, 9.8), yaw_rate=(0.0, 0.5)),  # Fast: 2.7 m, 8.2 m/s^2
+)
+
+
 @configclass
 class FigureEightCommandsCfg:
-    """A random figure eight, from wherever the payload starts."""
+    """A random figure eight, from wherever the payload starts; the other shape tasks swap in their own `shapes`."""
 
     pose_command = mdp.ShapeTrajectoryCommandCfg(
         asset_name="robot",
         body_name="load_odometry_sensor_link",
         debug_vis=True,
-        ranges=mdp.ShapeTrajectoryCommandCfg.Ranges(
-            amplitude=(1.0, 2.5),  # the thesis's a4 to a2 size
-            acceleration=(0.5, 4.5),  # up to past the a4's 4.1 m/s^2
-            yaw_rate=(-0.3, 0.3),  # both ways round, past the thesis's 0.25 rad/s
-        ),
+        shapes=(VALIDATION["FigureEight"],),
     )
 
 
@@ -284,26 +310,65 @@ class FigureEightEnvCfg(FlycraneEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.episode_length_s = 40.0  # the thesis's figure eight, rest to rest
-        # a figure up to 5 m long from a spawn up to 1 m off the env origin, turned any way, reaches 6 m
+        # from a spawn up to 1 m off the env origin: a figure up to 5 m long reaches 6 m, a walk within 4 m of its
+        # start along its own x and y, turned any way, 6.7 m
         self.terminations.bounding_box.params["threshold"] = 7.0
 
 
 @configclass
-class FigureEightA2EnvCfg(FigureEightEnvCfg):
-    """The thesis's figure eight: 5 x 4 m, up to 2.4 m/s and 2 m/s^2."""
+class RandomTrajectoryEnvCfg(FigureEightEnvCfg):
+    """Carry the payload along a random walk, rest to rest: training for every test reference without flying any of
+    their shapes."""
 
     def __post_init__(self):
         super().__post_init__()
-        self.commands.pose_command.csv = "figure_eight_v2_a2_yaw025.csv"
+        self.commands.pose_command.shapes = (VALIDATION["RandomTrajectory"],)
 
 
 @configclass
-class FigureEightA4EnvCfg(FigureEightEnvCfg):
-    """The thesis's figure eight at half the size, so twice the acceleration: up to 4.1 m/s^2."""
+class RandomTrajectoryMediumToFastEnvCfg(FigureEightEnvCfg):
+    """Carry the payload along random walks at Medium, Medium Plus and Fast difficulty, in equal shares with a multiple
+    of 3 envs: training up to the hardest test reference, still without flying any of their shapes."""
 
     def __post_init__(self):
         super().__post_init__()
-        self.commands.pose_command.csv = "figure_eight_v2_a4_yaw025.csv"
+        self.commands.pose_command.shapes = WALKS_MEDIUM_TO_FAST
+
+
+@configclass
+class FigureEightSlowEnvCfg(FigureEightEnvCfg):
+    """Slow: 5 x 4 m, a lap per 25 s, up to 1.2 m/s, 0.5 m/s^2 and 0.3 m/s^3."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shapes = (VALIDATION["Slow"],)
+
+
+@configclass
+class FigureEightMediumEnvCfg(FigureEightEnvCfg):
+    """Medium: 5 x 4 m, a lap per 12.6 s, up to 2.4 m/s, 2 m/s^2 and 2 m/s^3."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shapes = (VALIDATION["Medium"],)
+
+
+@configclass
+class FigureEightMediumPlusEnvCfg(FigureEightEnvCfg):
+    """Medium Plus: 2 x 2 m, a lap per 6.3 s, up to 2.2 m/s, 4.1 m/s^2 and 8 m/s^3."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shapes = (VALIDATION["MediumPlus"],)
+
+
+@configclass
+class FigureEightFastEnvCfg(FigureEightEnvCfg):
+    """Fast: 5 x 4 m, a lap per 6.3 s, up to 4.7 m/s, 8.2 m/s^2 and 16 m/s^3, leaning 40 degrees."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shapes = (VALIDATION["Fast"],)
 
 
 @configclass
@@ -312,7 +377,7 @@ class CircleEnvCfg(FigureEightEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.commands.pose_command.shape = Circle()
+        self.commands.pose_command.shapes = (VALIDATION["Circle"],)
 
 
 @configclass
@@ -321,4 +386,13 @@ class SquareEnvCfg(FigureEightEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.commands.pose_command.shape = Square()
+        self.commands.pose_command.shapes = (VALIDATION["Square"],)
+
+
+@configclass
+class ValidationEnvCfg(FigureEightEnvCfg):
+    """Every reference in VALIDATION at once: env i flies the i-th, round robin."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.pose_command.shapes = tuple(VALIDATION.values())

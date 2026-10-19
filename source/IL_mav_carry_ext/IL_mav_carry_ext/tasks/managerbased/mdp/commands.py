@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import MISSING, replace
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,16 +21,14 @@ from isaaclab.utils.configclass import (
     configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 )
 from isaaclab.utils.math import compute_pose_error, quat_from_euler_xyz, sample_uniform
-from python_mpc_cusadi import Approach, FigureEight, LoadState, LoadTrajectory, Shape
+from python_mpc_cusadi import Approach, FigureEight, LoadState, LoadTrajectory, Shape, SplinePath
+from python_mpc_cusadi.signals.specs import SPLINE_DEGREE
 from scipy.spatial.transform import Rotation
 
 from ....mpc.teacher import MpcTeacher
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-
-REFERENCE_DATA = Path(__file__).parents[6] / "validation_data"
-"""Where the fixed reference trajectories live: the extension's validation_data."""
 
 
 class MpcCommand(CommandTerm):
@@ -186,7 +183,9 @@ class ApproachPoseCommand(MpcCommand):
     def _build_reference(self, env_id: int, start: LoadState) -> LoadTrajectory:
         goal = self.goals[env_id].cpu().numpy()
         goal = LoadState(time=start.time, p=goal[:3], q=goal[3:])
-        return Approach(start=start, goal=goal, duration=self.cfg.ramp_duration, time_offset=start.time).build()
+        return Approach(
+            start=start, goal=goal, duration=self.cfg.ramp_duration, dt=self._env.step_dt, time_offset=start.time
+        ).build()
 
 
 @configclass
@@ -213,35 +212,21 @@ class ApproachPoseCommandCfg(MpcCommandCfg):
 
 
 class ShapeTrajectoryCommand(MpcCommand):
-    """A shape, moved to start at the payload and turned by its yaw: a random `FigureEight` per reset, a fixed
-    `Shape`, or a CSV's trajectory."""
+    """Each env's shape, moved to start at the payload and turned by its yaw: env i flies `cfg.shapes[i % len]`, a
+    fixed `Shape`, or a `RandomFigureEight` or `RandomWalk` drawn anew at every reset."""
 
     cfg: ShapeTrajectoryCommandCfg
 
-    def __init__(self, cfg: ShapeTrajectoryCommandCfg, env: ManagerBasedRLEnv):
-        super().__init__(cfg, env)
-        self.csv = LoadTrajectory.from_csv(REFERENCE_DATA / cfg.csv) if cfg.csv else None
-
-    def _shape(self) -> Shape:
-        """The configured shape, or a random figure eight."""
-        if self.cfg.shape is not None:
-            return self.cfg.shape
-        r = self.cfg.ranges
-        bounds = torch.tensor([r.amplitude, r.acceleration, r.yaw_rate], device=self.device)
-        amplitude, acceleration, yaw_rate = sample_uniform(
-            bounds[:, 0], bounds[:, 1], (3,), device=self.device
-        ).tolist()
-        # a FigureEight's peak acceleration at full speed is 17/8 amplitude (2 pi / period)^2
-        period = 2 * np.pi * np.sqrt(17 / 8 * amplitude / acceleration)
-        return FigureEight(amplitude=amplitude, period=period, yaw_rate=yaw_rate)
+    def _shape(self, env_id: int, start: LoadState) -> Shape | SplinePath:
+        """Env `env_id`'s entry, round robin; a random one drawn anew."""
+        entry = self.cfg.shapes[env_id % len(self.cfg.shapes)]
+        return entry if isinstance(entry, Shape) else entry.draw(start, self._env.max_episode_length_s)
 
     def _build_reference(self, env_id: int, start: LoadState) -> LoadTrajectory:
-        if self.csv is not None:
-            f = self.csv
-        else:
-            # long enough for the MPC's horizon at the episode's end
-            duration = self._env.max_episode_length_s + self.teacher.policies[0].horizon.Tf
-            f = replace(self._shape(), duration=duration).build()
+        # long enough for the MPC's horizon at the episode's end, a sample per step: coarser, the MPC and the
+        # student both read a sample up to a whole spacing ahead of each node
+        duration = self._env.max_episode_length_s + self.teacher.policies[0].horizon.Tf
+        f = replace(self._shape(env_id, start), duration=duration, dt=self._env.step_dt).build()
         yaw = Rotation.from_quat(start.q).as_euler("ZYX")[0] - Rotation.from_quat(f.q[0]).as_euler("ZYX")[0]
         turn = Rotation.from_euler("z", yaw)
         return LoadTrajectory(
@@ -261,19 +246,93 @@ class ShapeTrajectoryCommandCfg(MpcCommandCfg):
 
     class_type: type = ShapeTrajectoryCommand
 
-    @configclass
-    class Ranges:
-        """Uniform ranges a random `FigureEight` is sampled from."""
+    shapes: tuple = MISSING
+    """Env i flies shapes[i % len(shapes)]: a fixed `Shape`, the same at every reset, or a `RandomFigureEight` or
+    `RandomWalk`, drawn anew at every reset. Their duration is set to the episode's."""
 
-        amplitude: tuple[float, float] = MISSING  # min max [m], half the x-span
-        acceleration: tuple[float, float] = MISSING  # min max [m/s^2], the peak at full speed; sets the period
-        yaw_rate: tuple[float, float] = MISSING  # min max [rad/s]
 
-    ranges: Ranges = MISSING
+@configclass
+class RandomFigureEight:
+    """A random `FigureEight` per reset, from uniform ranges."""
 
-    shape: Shape | None = None
-    """A fixed shape instead, the same at every reset; its duration is set to the episode's."""
+    amplitude: tuple[float, float] = MISSING  # min max [m], half the x-span
+    acceleration: tuple[float, float] = MISSING  # min max [m/s^2], the peak at full speed; sets the period
+    yaw_rate: tuple[float, float] = MISSING  # min max [rad/s]
 
-    csv: str | None = None
-    """A fixed trajectory in REFERENCE_DATA instead of any shape, the same at every reset. The thesis's: 40 s, at rest at
-    both ends, figure_eight_v2_a2_yaw025.csv 5 x 4 m, up to 2.4 m/s and 2 m/s^2, the a4 half that size, 4.1 m/s^2."""
+    def draw(self, start: LoadState, episode: float) -> FigureEight:
+        amplitude, acceleration, yaw_rate = (
+            np.random.uniform(*bounds) for bounds in (self.amplitude, self.acceleration, self.yaw_rate)
+        )
+        # a FigureEight's peak acceleration at full speed is 17/8 amplitude (2 pi / period)^2
+        period = 2 * np.pi * np.sqrt(17 / 8 * amplitude / acceleration)
+        return FigureEight(amplitude=amplitude, period=period, yaw_rate=yaw_rate)
+
+
+WALK_INTERVAL = 0.95
+"""Time between a random walk's control points, per sqrt(size / acceleration): calibrated offline so the median
+peak acceleration over the walks is the sampled one."""
+
+WALK_STEP = 1.22
+"""A random walk's longest step, per size: calibrated offline so the median peak speed is sqrt(size acceleration)."""
+
+
+@configclass
+class RandomWalk:
+    """A random walk per reset, flown from rest to rest within the episode as a `SplinePath`.
+
+    Each draw takes the room the walk's turns take (size, v^2 / a), its peak acceleration and its peak heading
+    rate from uniform ranges. Size sets the step between control points, size and acceleration the time
+    between them, so the reference peaks at about the speed and acceleration drawn (`WALK_INTERVAL`,
+    `WALK_STEP`). The course keeps its direction with a random turn per step, mostly level, and turns back off
+    the walls: within `reach` of its start sideways, `vertical` of its start height and above `floor`. The
+    spline stays inside its control points, so inside those walls too. The heading rate takes a persistent
+    random walk within its peak, which the spline keeps to exactly.
+
+    It is drawn around the origin at heading 0 and placed like any shape: moved to the payload and turned by
+    its yaw.
+    """
+
+    size: tuple[float, float] = MISSING  # min max [m], v^2 / a: the room its turns take
+    acceleration: tuple[float, float] = MISSING  # min max [m/s^2], about its peak
+    yaw_rate: tuple[float, float] = MISSING  # min max [rad/s], its peak heading rate, either way round
+
+    reach: float = 4.0
+    """How far from its start the walk may go along x and y, m, before it is turned."""
+
+    vertical: float = 0.6
+    """How far above or below its start height the walk may go, m."""
+
+    floor: float = 0.4
+    """The lowest the walk may go, m."""
+
+    rest: float = 1.0
+    """Time at rest at each end of the episode, s."""
+
+    def draw(self, start: LoadState, episode: float) -> SplinePath:
+        size, acceleration, yaw_rate = (
+            np.random.uniform(*bounds) for bounds in (self.size, self.acceleration, self.yaw_rate)
+        )
+        interval, step = WALK_INTERVAL * np.sqrt(size / acceleration), WALK_STEP * size
+        # as many control points as come to rest `rest` before the episode ends
+        n = max(int((episode - 2 * self.rest) / interval) - SPLINE_DEGREE + 2, 2)
+
+        # the walls around its start, the origin here; the floor needs the start's own height
+        lo = np.array([-self.reach, -self.reach, max(-self.vertical, self.floor - start.p[2])])
+        hi = np.array([self.reach, self.reach, self.vertical])
+        level = np.array([1.0, 1.0, 0.3])  # mostly level: the height band is narrow
+        course = np.random.normal(size=3) * level
+        course /= np.linalg.norm(course)
+        points = [np.zeros(3)]
+        for _ in range(n - 1):
+            course += np.random.normal(size=3) * level
+            course /= np.linalg.norm(course)
+            p = points[-1] + step * np.random.uniform(0.5, 1.0) * course
+            course[(p < lo) | (p > hi)] *= -1  # turn back off the walls
+            points.append(np.clip(p, lo, hi))
+
+        rate, yaws = 0.0, [0.0]
+        for _ in range(n - 1):
+            rate = np.clip(rate + 0.3 * yaw_rate * np.random.normal(), -yaw_rate, yaw_rate)
+            yaws.append(yaws[-1] + rate * interval)
+
+        return SplinePath(points=np.array(points), yaws=np.array(yaws), interval=interval, start=self.rest)

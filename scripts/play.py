@@ -13,7 +13,7 @@ Example, from the repo root:
 
     ./docker/dev.sh run --rm isaac bash -c '$ISAAC_PY \
         IL_cooperative_aerial_manipulation_ext/scripts/play.py \
-        --headless --task Flycrane-FigureEightA2-v0 --checkpoint logs/dagger/<run_name>/round_024.pt --num_envs 8'
+        --headless --task Flycrane-FigureEightMedium-v0 --checkpoint logs/dagger/<run_name>/round_024.pt --num_envs 8'
 """
 
 import argparse
@@ -25,7 +25,7 @@ parser.add_argument(
     "--task",
     type=str,
     required=True,
-    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightA2-v0, -FigureEightA4-v0, -Circle-v0, -Square-v0.",
+    help="Flycrane-ApproachPose-v0, Flycrane-RandomTrajectory-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightSlow-v0, -FigureEightMedium-v0, -FigureEightMediumPlus-v0, -FigureEightFast-v0, -Circle-v0, -Square-v0.",
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint from scripts/train.py or dagger.py.")
 parser.add_argument("--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline.")

@@ -15,7 +15,7 @@ parser.add_argument(
     "--task",
     type=str,
     required=True,
-    help="Flycrane-ApproachPose-v0, Flycrane-FigureEight-v0 (random), Flycrane-FigureEightA2-v0, Flycrane-FigureEightA4-v0, Flycrane-Circle-v0, Flycrane-Square-v0.",
+    help="Flycrane-ApproachPose-v0, Flycrane-RandomTrajectory-v0, -RandomTrajectoryMediumToFast-v0, Flycrane-FigureEight-v0 (random), Flycrane-FigureEightSlow-v0, -FigureEightMedium-v0, -FigureEightMediumPlus-v0, -FigureEightFast-v0, Flycrane-Circle-v0, Flycrane-Square-v0.",
 )
 parser.add_argument(
     "--run_name", type=str, required=True, help="Name of directory under logs/dagger. Stores run in this directory."
