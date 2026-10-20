@@ -125,7 +125,6 @@ class ActionsCfg:
         body_name="Falcon.*rotor_.*",
         debug_vis=False,
         control_mode="geometric",  # node 1's p, v, a, w per drone
-        feedforward_command="pose_command",  # the plan is a correction on each drone's reference
     )
 
 
@@ -163,7 +162,7 @@ class ObservationsCfg:
         """The student's label and the teacher's action: each drone's plan in its own frame,
         (num_envs, num_drones, num_nodes * 12)."""
 
-        teacher_plan_residual = ObsTerm(func=mdp.teacher_plan_residual, params={"command_name": "pose_command"})
+        teacher_plan_rel_drone = ObsTerm(func=mdp.teacher_plan_rel_drone, params={"command_name": "pose_command"})
 
         def __post_init__(self):
             self.enable_corruption = False
