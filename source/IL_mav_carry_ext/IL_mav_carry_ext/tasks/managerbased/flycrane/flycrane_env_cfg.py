@@ -137,21 +137,33 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """The uniform student's input: (num_envs, num_drones, input_dim), one row per drone.
 
-        No payload state at all: each drone sees where it should be and how hard its cable should pull (the
-        teacher's own drone reference, from the payload reference alone), where its attach point should be, where
-        that is (its cable as a vector) and how fast it moves, both errors directly, and its own state. The attach
-        point tells the drones apart. No noise on the reference: it is a command, not a measurement.
+        The baseline's inputs, payload state included, plus where the drone should be and how hard its cable should
+        pull (the teacher's own drone reference, from the payload reference alone). The payload terms and the
+        payload reference are the same for every drone, the rest each drone's own; the attach point tells the
+        drones apart. No noise on the references: they are commands, not measurements.
         """
 
+        payload_orientation = ObsTerm(
+            func=mdp.copy_to_each_drone, params={"term": mdp.payload_orientation}, noise=Gnoise(std=0.01)
+        )
+        payload_linear_velocities = ObsTerm(
+            func=mdp.copy_to_each_drone, params={"term": mdp.payload_linear_velocities}, noise=Gnoise(std=0.01)
+        )
+        payload_angular_velocities = ObsTerm(
+            func=mdp.copy_to_each_drone, params={"term": mdp.payload_angular_velocities}, noise=Gnoise(std=0.02)
+        )
+        payload_ref_horizon = ObsTerm(
+            func=mdp.copy_to_each_drone,
+            params={"term": mdp.payload_ref_horizon, "params": {"command_name": "pose_command"}},
+        )
         drone_feedforward_horizon = ObsTerm(func=mdp.drone_feedforward_horizon, params={"command_name": "pose_command"})
         drone_tension_reference = ObsTerm(func=mdp.drone_tension_reference, params={"command_name": "pose_command"})
-        attach_ref_horizon = ObsTerm(func=mdp.attach_ref_horizon, params={"command_name": "pose_command"})
-        attach_point_error = ObsTerm(func=mdp.attach_point_error, params={"command_name": "pose_command"})
-        drone_cable_vector = ObsTerm(func=mdp.drone_cable_vector)
-        drone_cable_vector_rate = ObsTerm(func=mdp.drone_cable_vector_rate)
+
+        drone_pos_rel_payload = ObsTerm(func=mdp.payload_drone_rpos, noise=Gnoise(std=0.003))
         drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
         drone_linear_velocities = ObsTerm(func=mdp.drone_linear_velocities, noise=Gnoise(std=0.01))
         drone_angular_velocities = ObsTerm(func=mdp.drone_angular_velocities, noise=Gnoise(std=0.02))
+        drone_cable_dir = ObsTerm(func=mdp.drone_cable_dir, noise=Gnoise(std=0.01))
         drone_attach_point = ObsTerm(func=mdp.drone_attach_point)
 
         def __post_init__(self):
