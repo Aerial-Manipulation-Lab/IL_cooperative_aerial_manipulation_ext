@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.math import matrix_from_quat, quat_apply
 from python_mpc_cusadi import TuningCfg
 from python_mpc_cusadi.ocp.horizon import Horizon
@@ -92,16 +92,46 @@ def drone_cable_dir(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
     geometry exactly as the MPC builds it from the measured endpoints under
     its taut-cable assumption.
     """
+    return torch.nn.functional.normalize(-drone_cable_vector(env, asset_cfg), dim=-1)
+
+
+def _attach_body(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Each drone's cable attach point on the payload, payload body frame, as the MPC has it: (num_drones, 3)."""
+    return torch.tensor(np.stack([d.attach_point for d in FLYCRANE_SIM.drones]), dtype=torch.float32, device=env.device)
+
+
+def drone_cable_vector(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Each drone's attach point on the payload relative to the drone, world frame: (num_envs, num_drones, 3).
+
+    The cable as a vector, l s_i; on hardware a measured or estimated cable direction times the cable length.
+    """
     robot: Articulation = env.scene[asset_cfg.name]
     payload = robot.data.body_com_state_w.torch[:, payload_idx[0]]
-    attach_body = torch.tensor(
-        np.stack([d.attach_point for d in FLYCRANE_SIM.drones]), dtype=torch.float32, device=env.device
-    )
-    num_drones = attach_body.shape[0]
-    payload_quat = payload[:, None, 3:7].expand(-1, num_drones, -1)
+    attach_body = _attach_body(env)
+    payload_quat = payload[:, None, 3:7].expand(-1, attach_body.shape[0], -1)
     attach_world = payload[:, None, :3] + quat_apply(payload_quat, attach_body.expand(env.num_envs, -1, -1))
-    cable = robot.data.body_com_state_w.torch[:, drone_idx, :3] - attach_world
-    return torch.nn.functional.normalize(cable, dim=-1)
+    return attach_world - robot.data.body_com_state_w.torch[:, drone_idx, :3]
+
+
+class drone_cable_vector_rate(ManagerTermBase):
+    """The rate of `drone_cable_vector`, differenced over one step: how fast the attach point moves relative to the
+    drone, (num_envs, num_drones, 3). Zero on an episode's first step."""
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.last = torch.zeros(env.num_envs, len(drone_idx), 3, device=env.device)
+        self.fresh = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids=None):
+        self.fresh[slice(None) if env_ids is None else env_ids] = True
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+        now = drone_cable_vector(env, asset_cfg)
+        self.last[self.fresh] = now[self.fresh]
+        self.fresh[:] = False
+        rate = (now - self.last) / env.step_dt
+        self.last = now
+        return rate
 
 
 # Observations of the reference the MPC tracks
@@ -148,6 +178,43 @@ def payload_ref_horizon(
 
     ref = torch.cat([stack("p") - payload_pos_env[:, None], stack("v"), stack("a"), rot6d, stack("w")], dim=-1)
     return ref.view(env.num_envs, -1)
+
+
+def attach_ref_horizon(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Where each drone's attach point should be over the MPC's horizon, from the payload reference and the attach
+    point alone, so no payload state enters: per node its position relative to the drone, velocity and
+    acceleration, world axes. (num_envs, num_drones, num_nodes * 9).
+
+    c = p + R rho, c' = v + R (w x rho), c'' = a + R (alpha x rho + w x (w x rho)), with the reference's body-frame
+    rates w and alpha.
+    """
+    term = env.command_manager.get_term(command_name)
+    now = float(env.common_step_counter) * env.step_dt
+    refs = [term.get_reference(i) for i in range(env.num_envs)]
+    nodes, drones = len(REF_HORIZON_OFFSETS), len(drone_idx)
+    if any(ref is None for ref in refs):
+        # only before the first reset, when the observation manager probes this term for its shape
+        return torch.zeros(env.num_envs, drones, nodes * 9, device=env.device)
+    windows = [ref.window(now, REF_HORIZON_OFFSETS) for ref in refs]
+
+    def stack(name):  # (num_envs, num_nodes, 1, k), broadcast over the drones
+        return torch.as_tensor(np.stack([getattr(w, name) for w in windows]), dtype=torch.float32, device=env.device)[
+            :, :, None
+        ]
+
+    rot = matrix_from_quat(stack("q"))
+    rho = _attach_body(env).expand(env.num_envs, nodes, -1, -1)
+    w, alpha = stack("w").expand_as(rho), stack("alpha").expand_as(rho)
+    w_rho = torch.cross(w, rho, dim=-1)
+    turn = lambda x: (rot @ x[..., None]).squeeze(-1)  # noqa: E731
+    robot: Articulation = env.scene[asset_cfg.name]
+    drone = robot.data.body_com_state_w.torch[:, drone_idx, :3] - env.scene.env_origins[:, None]
+    c = stack("p") + turn(rho) - drone[:, None]
+    c_dot = stack("v") + turn(w_rho)
+    c_ddot = stack("a") + turn(torch.cross(alpha, rho, dim=-1) + torch.cross(w, w_rho, dim=-1))
+    return torch.cat([c, c_dot, c_ddot], dim=-1).transpose(1, 2).flatten(2)
 
 
 # The uniform student's input and label, one row per drone

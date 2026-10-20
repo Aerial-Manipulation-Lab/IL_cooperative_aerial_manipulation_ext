@@ -136,30 +136,17 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """The uniform student's input: (num_envs, num_drones, input_dim), one row per drone.
 
-        The payload terms and the reference are the same for every drone, the drone terms are each
-        drone's own, and the attach point tells the drones apart. No noise on the reference: it is a
-        command, not a measurement.
+        No payload state at all: each drone sees where its own attach point should be (from the reference and the
+        attach point alone), where it is (its cable as a vector) and how fast that moves, and its own state. The
+        attach point tells the drones apart. No noise on the reference: it is a command, not a measurement.
         """
 
-        payload_orientation = ObsTerm(
-            func=mdp.copy_to_each_drone, params={"term": mdp.payload_orientation}, noise=Gnoise(std=0.01)
-        )
-        payload_linear_velocities = ObsTerm(
-            func=mdp.copy_to_each_drone, params={"term": mdp.payload_linear_velocities}, noise=Gnoise(std=0.01)
-        )
-        payload_angular_velocities = ObsTerm(
-            func=mdp.copy_to_each_drone, params={"term": mdp.payload_angular_velocities}, noise=Gnoise(std=0.02)
-        )
-        payload_ref_horizon = ObsTerm(
-            func=mdp.copy_to_each_drone,
-            params={"term": mdp.payload_ref_horizon, "params": {"command_name": "pose_command"}},
-        )
-
-        drone_pos_rel_payload = ObsTerm(func=mdp.payload_drone_rpos, noise=Gnoise(std=0.003))
+        attach_ref_horizon = ObsTerm(func=mdp.attach_ref_horizon, params={"command_name": "pose_command"})
+        drone_cable_vector = ObsTerm(func=mdp.drone_cable_vector)
+        drone_cable_vector_rate = ObsTerm(func=mdp.drone_cable_vector_rate)
         drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
         drone_linear_velocities = ObsTerm(func=mdp.drone_linear_velocities, noise=Gnoise(std=0.01))
         drone_angular_velocities = ObsTerm(func=mdp.drone_angular_velocities, noise=Gnoise(std=0.02))
-        drone_cable_dir = ObsTerm(func=mdp.drone_cable_dir, noise=Gnoise(std=0.01))
         drone_attach_point = ObsTerm(func=mdp.drone_attach_point)
 
         def __post_init__(self):
