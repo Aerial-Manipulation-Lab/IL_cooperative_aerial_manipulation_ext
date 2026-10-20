@@ -144,14 +144,14 @@ class ObservationsCfg:
 
         drone_ref_horizon = ObsTerm(func=mdp.drone_ref_horizon, params={"command_name": "pose_command"})
         cable_tension_ref_horizon = ObsTerm(func=mdp.cable_tension_ref_horizon, params={"command_name": "pose_command"})
-        attach_point_ref_horizon = ObsTerm(func=mdp.attach_point_ref_horizon, params={"command_name": "pose_command"})
-        attach_point_error = ObsTerm(func=mdp.attach_point_error, params={"command_name": "pose_command"})
-        attach_point_rel_drone = ObsTerm(func=mdp.attach_point_rel_drone)
-        attach_point_rel_drone_rate = ObsTerm(func=mdp.attach_point_rel_drone_rate)
-        drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
-        drone_linear_velocities = ObsTerm(func=mdp.drone_linear_velocities, noise=Gnoise(std=0.01))
-        drone_angular_velocities = ObsTerm(func=mdp.drone_angular_velocities, noise=Gnoise(std=0.02))
-        drone_attach_point = ObsTerm(func=mdp.drone_attach_point)
+        cable_attach_ref_horizon = ObsTerm(func=mdp.cable_attach_ref_horizon, params={"command_name": "pose_command"})
+        cable_attach_error = ObsTerm(func=mdp.cable_attach_error, params={"command_name": "pose_command"})
+        cable_attach_rel_drone = ObsTerm(func=mdp.cable_attach_rel_drone)
+        cable_attach_rel_drone_rate = ObsTerm(func=mdp.cable_attach_rel_drone_rate)
+        drone_orientation = ObsTerm(func=mdp.drone_orientation, noise=Gnoise(std=0.01))
+        drone_linear_velocity = ObsTerm(func=mdp.drone_linear_velocity, noise=Gnoise(std=0.01))
+        drone_angular_velocity = ObsTerm(func=mdp.drone_angular_velocity, noise=Gnoise(std=0.02))
+        cable_attach_point = ObsTerm(func=mdp.cable_attach_point)
 
         def __post_init__(self):
             self.enable_corruption = False  # for adding noise to the observations

@@ -22,10 +22,6 @@ from .marker_utils import (
     FORCE_MARKER_Z_CFG,
     ORIENTATION_MARKER_CFG,
 )
-from .observations import REF_HORIZON_OFFSETS
-
-NUM_NODES = len(REF_HORIZON_OFFSETS)
-"""Nodes per drone in the action's plan: the MPC's shooting nodes."""
 
 
 class LowLevelAction(ActionTerm):
@@ -46,6 +42,7 @@ class LowLevelAction(ActionTerm):
         # configuration
         self.cfg = cfg
         self._num_drones = cfg.num_drones
+        self._num_nodes = env.command_manager.get_term(cfg.command_name).teacher.num_nodes
         self._num_waypoints = cfg.num_waypoints
         self._control_mode = cfg.control_mode
         if self._control_mode == "geometric":
@@ -121,7 +118,7 @@ class LowLevelAction(ActionTerm):
 
     @property
     def action_dim(self) -> int:
-        return self._num_drones * NUM_NODES * 12
+        return self._num_drones * self._num_nodes * 12
 
     @property
     def raw_actions(self) -> torch.Tensor:
@@ -150,8 +147,8 @@ class LowLevelAction(ActionTerm):
                 `teacher_plan_rel_drone` gives it: per node p, v, a, w, with the drone's position and
                 velocity now taken off p and v. They are added back here."""
         self._raw_actions[:] = actions
-        node1 = actions.reshape(self.num_envs, self._num_drones, NUM_NODES, 12)[:, :, 1].clone()
         drones = self._robot.data.body_com_state_w.torch[:, self._falcon_idx]
+        node1 = actions.reshape(self.num_envs, self._num_drones, self._num_nodes, 12)[:, :, 1].clone()
         node1[..., 0:3] += drones[..., :3] - self._env.scene.env_origins[:, None]
         node1[..., 3:6] += drones[..., 7:10]
         self._waypoints = node1.flatten(1)
@@ -403,6 +400,8 @@ class LowLevelActionCfg(ActionTermCfg):
     """Name of the body in the asset on which the forces are applied: Falcon.*base_link or Falcon.*rotor*."""
     num_drones: int = 3
     """Number of drones."""
+    command_name: str = "pose_command"
+    """Command whose teacher's plan the actions follow."""
     control_mode: str = MISSING
     """Control mode for the low level controller. Either 'geometric' or 'ACCBR'."""
     num_waypoints: int = 1
