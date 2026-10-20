@@ -205,7 +205,11 @@ def attach_point_ref_horizon(
         ]
 
     rot = matrix_from_quat(stack("q"))
-    rho = _attach_body(env).expand(env.num_envs, nodes, -1, -1)
+    # the attach points as the teacher's model has them: this is a reference, not a measurement
+    model = torch.tensor(
+        np.stack([d.attach_point for d in term.teacher.plant.drones]), dtype=torch.float32, device=env.device
+    )
+    rho = model.expand(env.num_envs, nodes, -1, -1)
     w, alpha = stack("w").expand_as(rho), stack("alpha").expand_as(rho)
     w_rho = torch.cross(w, rho, dim=-1)
     turn = lambda x: (rot @ x[..., None]).squeeze(-1)  # noqa: E731
@@ -281,10 +285,10 @@ def copy_to_each_drone(
     return term(env, **(params or {}))[:, None].expand(-1, FLYCRANE_SIM.num_drones, -1)
 
 
-def drone_attach_point(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Each drone's cable attach point on the payload, payload body frame, as the MPC has it
-    (`FLYCRANE_SIM`): (num_envs, num_drones, 3). The one input that tells the drones apart."""
-    points = np.stack([d.attach_point for d in FLYCRANE_SIM.drones])
+def drone_attach_point(env: ManagerBasedRLEnv, command_name: str = "pose_command") -> torch.Tensor:
+    """Each drone's cable attach point on the payload, payload body frame, as the teacher's model has it:
+    (num_envs, num_drones, 3). The one input that tells the drones apart."""
+    points = np.stack([d.attach_point for d in env.command_manager.get_term(command_name).teacher.plant.drones])
     return torch.tensor(points, dtype=torch.float32, device=env.device).expand(env.num_envs, -1, -1)
 
 
