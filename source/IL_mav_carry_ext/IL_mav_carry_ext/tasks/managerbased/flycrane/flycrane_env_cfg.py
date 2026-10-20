@@ -142,12 +142,12 @@ class ObservationsCfg:
         point tells the drones apart. No noise on the reference: it is a command, not a measurement.
         """
 
-        drone_feedforward_horizon = ObsTerm(func=mdp.drone_feedforward_horizon, params={"command_name": "pose_command"})
-        drone_tension_reference = ObsTerm(func=mdp.drone_tension_reference, params={"command_name": "pose_command"})
-        attach_ref_horizon = ObsTerm(func=mdp.attach_ref_horizon, params={"command_name": "pose_command"})
+        drone_ref_horizon = ObsTerm(func=mdp.drone_ref_horizon, params={"command_name": "pose_command"})
+        cable_tension_ref_horizon = ObsTerm(func=mdp.cable_tension_ref_horizon, params={"command_name": "pose_command"})
+        attach_point_ref_horizon = ObsTerm(func=mdp.attach_point_ref_horizon, params={"command_name": "pose_command"})
         attach_point_error = ObsTerm(func=mdp.attach_point_error, params={"command_name": "pose_command"})
-        drone_cable_vector = ObsTerm(func=mdp.drone_cable_vector)
-        drone_cable_vector_rate = ObsTerm(func=mdp.drone_cable_vector_rate)
+        attach_point_rel_drone = ObsTerm(func=mdp.attach_point_rel_drone)
+        attach_point_rel_drone_rate = ObsTerm(func=mdp.attach_point_rel_drone_rate)
         drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
         drone_linear_velocities = ObsTerm(func=mdp.drone_linear_velocities, noise=Gnoise(std=0.01))
         drone_angular_velocities = ObsTerm(func=mdp.drone_angular_velocities, noise=Gnoise(std=0.02))
