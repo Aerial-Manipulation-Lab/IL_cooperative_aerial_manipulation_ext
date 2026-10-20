@@ -96,7 +96,8 @@ def drone_cable_dir(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
 
 
 def _attach_body(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Each drone's cable attach point on the payload, payload body frame, as the MPC has it: (num_drones, 3)."""
+    """Each drone's cable attach point on the payload as the sim has it, payload body frame: (num_drones, 3). For
+    measurements; model-based terms read the teacher's plant instead."""
     return torch.tensor(np.stack([d.attach_point for d in FLYCRANE_SIM.drones]), dtype=torch.float32, device=env.device)
 
 
