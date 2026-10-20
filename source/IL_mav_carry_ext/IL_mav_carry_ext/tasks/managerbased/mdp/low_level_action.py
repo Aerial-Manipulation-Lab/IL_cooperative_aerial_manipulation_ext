@@ -22,7 +22,7 @@ from .marker_utils import (
     FORCE_MARKER_Z_CFG,
     ORIENTATION_MARKER_CFG,
 )
-from .observations import REF_HORIZON_OFFSETS
+from .observations import REF_HORIZON_OFFSETS, drone_reference_window
 
 NUM_NODES = len(REF_HORIZON_OFFSETS)
 """Nodes per drone in the action's plan: the MPC's shooting nodes."""
@@ -150,10 +150,14 @@ class LowLevelAction(ActionTerm):
                 `teacher_plan_rel_drone` gives it: per node p, v, a, w, with the drone's position and
                 velocity now taken off p and v. They are added back here."""
         self._raw_actions[:] = actions
-        drones = self._robot.data.body_com_state_w.torch[:, self._falcon_idx]
         node1 = actions.reshape(self.num_envs, self._num_drones, NUM_NODES, 12)[:, :, 1].clone()
-        node1[..., 0:3] += drones[..., :3] - self._env.scene.env_origins[:, None]
-        node1[..., 3:6] += drones[..., 7:10]
+        if self.cfg.feedforward_command is not None:
+            # a residual plan, `teacher_plan_residual`: add each drone's reference back
+            node1[..., 0:9] += drone_reference_window(self._env, self.cfg.feedforward_command)[:, :, 1, :9]
+        else:
+            drones = self._robot.data.body_com_state_w.torch[:, self._falcon_idx]
+            node1[..., 0:3] += drones[..., :3] - self._env.scene.env_origins[:, None]
+            node1[..., 3:6] += drones[..., 7:10]
         self._waypoints = node1.flatten(1)
         self._prev_forces = self._forces.clone()
         self._tick = 0
@@ -411,3 +415,6 @@ class LowLevelActionCfg(ActionTermCfg):
     """Decimation factor for the low level action term."""
     debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
+    feedforward_command: str | None = None
+    """A command whose drone references the actions are residuals on (`teacher_plan_residual`); None: the actions
+    are plans relative to the drone (`teacher_plan_rel_drone`)."""

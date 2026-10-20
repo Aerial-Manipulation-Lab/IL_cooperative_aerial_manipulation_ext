@@ -125,6 +125,7 @@ class ActionsCfg:
         body_name="Falcon.*rotor_.*",
         debug_vis=False,
         control_mode="geometric",  # node 1's p, v, a, w per drone
+        feedforward_command="pose_command",  # the plan is a correction on each drone's reference
     )
 
 
@@ -136,12 +137,16 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """The uniform student's input: (num_envs, num_drones, input_dim), one row per drone.
 
-        No payload state at all: each drone sees where its own attach point should be (from the reference and the
-        attach point alone), where it is (its cable as a vector) and how fast that moves, and its own state. The
-        attach point tells the drones apart. No noise on the reference: it is a command, not a measurement.
+        No payload state at all: each drone sees where it should be and how hard its cable should pull (the
+        teacher's own drone reference, from the payload reference alone), where its attach point should be, where
+        that is (its cable as a vector) and how fast it moves, both errors directly, and its own state. The attach
+        point tells the drones apart. No noise on the reference: it is a command, not a measurement.
         """
 
+        drone_feedforward_horizon = ObsTerm(func=mdp.drone_feedforward_horizon, params={"command_name": "pose_command"})
+        drone_tension_reference = ObsTerm(func=mdp.drone_tension_reference, params={"command_name": "pose_command"})
         attach_ref_horizon = ObsTerm(func=mdp.attach_ref_horizon, params={"command_name": "pose_command"})
+        attach_point_error = ObsTerm(func=mdp.attach_point_error, params={"command_name": "pose_command"})
         drone_cable_vector = ObsTerm(func=mdp.drone_cable_vector)
         drone_cable_vector_rate = ObsTerm(func=mdp.drone_cable_vector_rate)
         drone_orientations = ObsTerm(func=mdp.drone_orientations, noise=Gnoise(std=0.01))
@@ -158,7 +163,7 @@ class ObservationsCfg:
         """The student's label and the teacher's action: each drone's plan in its own frame,
         (num_envs, num_drones, num_nodes * 12)."""
 
-        teacher_plan_rel_drone = ObsTerm(func=mdp.teacher_plan_rel_drone, params={"command_name": "pose_command"})
+        teacher_plan_residual = ObsTerm(func=mdp.teacher_plan_residual, params={"command_name": "pose_command"})
 
         def __post_init__(self):
             self.enable_corruption = False

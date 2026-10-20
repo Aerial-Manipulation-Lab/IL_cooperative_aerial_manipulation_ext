@@ -217,6 +217,59 @@ def attach_ref_horizon(
     return torch.cat([c, c_dot, c_ddot], dim=-1).transpose(1, 2).flatten(2)
 
 
+def drone_reference_window(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Each drone's reference (`MpcCommand.drone_references`) at the MPC's nodes from now: per drone and node p, v,
+    a and the cable tension, env frame. (num_envs, num_drones, num_nodes, 10); zeros before the first reset."""
+    term = env.command_manager.get_term(command_name)
+    if any(ref is None for ref in term.drone_references):
+        return torch.zeros(env.num_envs, len(drone_idx), len(REF_HORIZON_OFFSETS), 10, device=env.device)
+    now = float(env.common_step_counter) * env.step_dt
+    rows = [
+        drones[ref.indices_at(now + REF_HORIZON_OFFSETS)]
+        for ref, drones in zip(term.references, term.drone_references, strict=True)
+    ]
+    return torch.as_tensor(np.stack(rows), dtype=torch.float32, device=env.device).transpose(1, 2)
+
+
+def drone_feedforward_horizon(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Where each drone should be over the horizon, relative to the drone now: per node position and velocity minus
+    the drone's, and acceleration. Node 0 is the drone's own error. (num_envs, num_drones, num_nodes * 9)."""
+    ref = drone_reference_window(env, command_name)[..., :9].clone()
+    robot: Articulation = env.scene[asset_cfg.name]
+    drones = robot.data.body_com_state_w.torch[:, drone_idx]
+    ref[..., 0:3] -= (drones[..., :3] - env.scene.env_origins[:, None])[:, :, None]
+    ref[..., 3:6] -= drones[:, :, None, 7:10]
+    return ref.flatten(2)
+
+
+def drone_tension_reference(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """How hard each drone's cable should pull over the horizon, N: (num_envs, num_drones, num_nodes)."""
+    return drone_reference_window(env, command_name)[..., 9]
+
+
+class attach_point_error(ManagerTermBase):
+    """Each drone's attach point against its reference now: position and velocity of the reference minus the actual,
+    the actual velocity from the drone's velocity and the cable vector differenced over one step.
+    (num_envs, num_drones, 6)."""
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.rate = drone_cable_vector_rate(cfg, env)
+
+    def reset(self, env_ids=None):
+        self.rate.reset(env_ids)
+
+    def __call__(
+        self, env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    ) -> torch.Tensor:
+        ref = attach_ref_horizon(env, command_name, asset_cfg)[..., :6]  # node 0: position rel drone, velocity
+        robot: Articulation = env.scene[asset_cfg.name]
+        velocity = robot.data.body_com_state_w.torch[:, drone_idx, 7:10] + self.rate(env, asset_cfg)
+        return torch.cat([ref[..., :3] - drone_cable_vector(env, asset_cfg), ref[..., 3:6] - velocity], dim=-1)
+
+
 # The uniform student's input and label, one row per drone
 
 
@@ -233,6 +286,19 @@ def drone_attach_point(env: ManagerBasedRLEnv) -> torch.Tensor:
     (`FLYCRANE_SIM`): (num_envs, num_drones, 3). The one input that tells the drones apart."""
     points = np.stack([d.attach_point for d in FLYCRANE_SIM.drones])
     return torch.tensor(points, dtype=torch.float32, device=env.device).expand(env.num_envs, -1, -1)
+
+
+def teacher_plan_residual(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Each drone's teacher plan minus its reference (`drone_reference_window`): the correction the MPC makes, the
+    student's label and the teacher's action, (num_envs, num_drones, num_nodes * 12).
+
+    Per node p, v and a minus the drone's reference; w as planned. The action term adds the reference back. From
+    the true state, so noise on the policy group never reaches it.
+    """
+    teacher = env.command_manager.get_term(command_name).teacher
+    label = teacher.plan.clone()
+    label[..., 0:9] -= drone_reference_window(env, command_name)[..., :9]
+    return label.flatten(-2)
 
 
 def teacher_plan_rel_drone(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:

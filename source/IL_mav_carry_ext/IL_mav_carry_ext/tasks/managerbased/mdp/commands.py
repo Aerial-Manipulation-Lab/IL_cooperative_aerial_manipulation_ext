@@ -54,6 +54,7 @@ class MpcCommand(CommandTerm):
         self.metrics["pos_rmse_m"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["att_rmse_deg"] = torch.zeros(self.num_envs, device=self.device)
         self.references: list = [None] * self.num_envs
+        self.drone_references: list = [None] * self.num_envs
         self.teacher = MpcTeacher(env, rebuild=cfg.rebuild)
         self.solved_at = np.full(self.num_envs, -1)
 
@@ -69,6 +70,29 @@ class MpcCommand(CommandTerm):
         """The reference for one env, leaving `start` (the payload at rest now) at `start.time`."""
         raise NotImplementedError
 
+    def _drone_reference(self, env_id: int) -> np.ndarray:
+        """Where each drone should be if the payload flew its reference exactly: the teacher's own cable reference
+        (from the reference alone) placed on the reference, rope ends, env frame. Per reference sample and drone p, v,
+        a and the cable tension: (num_samples, num_drones, 10)."""
+        policy = self.teacher.policies[env_id]
+        ref, cables = policy.traj, policy.cable_traj
+        lengths = np.array([d.cable_length for d in policy.plant.drones])
+        # the cable reference carries no angular acceleration; difference its rate
+        cable_acc = np.gradient(cables.r, ref.time, axis=0)
+        p, v, a = policy.problem.physics.calculate_drone_states(
+            ref.p,
+            ref.v,
+            Rotation.from_quat(ref.q).as_matrix(),
+            ref.w,
+            ref.a,
+            ref.alpha,
+            cables.s,
+            cables.r,
+            cable_acc,
+            lengths,
+        )
+        return np.concatenate([p, v, a, cables.t[..., None]], axis=-1)
+
     def _resample_command(self, env_ids: Sequence[int]):
         ids = torch.arange(self.num_envs, device=self.device)[env_ids].tolist()
         measured = self.robot.data.body_com_state_w.torch[ids, self.body_idx].cpu().numpy()
@@ -77,6 +101,7 @@ class MpcCommand(CommandTerm):
             start = LoadState(time=self._now(), p=measured[j, :3] - origins[j], q=measured[j, 3:7])
             self.references[i] = self._build_reference(i, start)
             self.teacher.reset(i, self.references[i])
+            self.drone_references[i] = self._drone_reference(i)
         for _ in range(self.cfg.warmup_solves if self.cfg.solve_teacher else 0):
             self._solve(ids)
         self._track(ids)
