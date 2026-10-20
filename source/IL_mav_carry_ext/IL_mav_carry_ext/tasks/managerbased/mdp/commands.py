@@ -21,11 +21,12 @@ from isaaclab.utils.configclass import (
     configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 )
 from isaaclab.utils.math import compute_pose_error, quat_from_euler_xyz, sample_uniform
-from python_mpc_cusadi import Approach, FigureEight, LoadState, LoadTrajectory, Shape, SplinePath
+from python_mpc_cusadi import Approach, FigureEight, LoadState, LoadTrajectory, PlantCfg, Shape, SplinePath
 from python_mpc_cusadi.signals.specs import SPLINE_DEGREE
 from scipy.spatial.transform import Rotation
 
 from ....mpc.teacher import MpcTeacher
+from ....plants import FLYCRANE_SIM
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -54,7 +55,7 @@ class MpcCommand(CommandTerm):
         self.metrics["pos_rmse_m"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["att_rmse_deg"] = torch.zeros(self.num_envs, device=self.device)
         self.references: list = [None] * self.num_envs
-        self.teacher = MpcTeacher(env, rebuild=cfg.rebuild)
+        self.teacher = MpcTeacher(env, plant=cfg.model or FLYCRANE_SIM, rebuild=cfg.rebuild)
         self.solved_at = np.full(self.num_envs, -1)
 
     @property
@@ -158,6 +159,10 @@ class MpcCommandCfg(CommandTermCfg):
     warmup_solves: int = 20
     """Solves at each reset, all for that same instant: the MPC does one SQP iteration per solve, so the
     first plan flown is converged instead of the cold start's first guess."""
+
+    model: PlantCfg | None = None
+    """The plant the teacher and every model-based input assume; None: the sim's own, `FLYCRANE_SIM`. Set it apart
+    from the sim to test a wrong model (validate.py --model_cable_length, --model_attach_offset)."""
 
     rebuild: bool = False
     """Regenerate the MPC teacher's acados solver first; needed once per machine."""

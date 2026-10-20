@@ -25,6 +25,14 @@ parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint fro
 parser.add_argument("--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline.")
 parser.add_argument("--flights", type=int, default=1, help="Flights per reference, each from its own random start.")
 parser.add_argument("--seed", type=int, default=0, help="The same seed gives the same starts and random draws.")
+# a plant unlike the model: the sim's payload changed, every controller keeping its model
+parser.add_argument("--payload_mass_scale", type=float, default=1.0, help="The sim payload's mass, times this.")
+parser.add_argument("--payload_com_offset", type=float, default=0.0, help="The sim payload's COM moved along x, m.")
+# a model unlike the plant: the teacher and every model-based input assume this, the sim unchanged
+parser.add_argument("--model_cable_length", type=float, default=None, help="The model's cable length, m.")
+parser.add_argument(
+    "--model_attach_offset", type=float, default=0.0, help="The model's attach points moved along x, m."
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if not args_cli.teacher and args_cli.checkpoint is None:
@@ -37,12 +45,18 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
+from dataclasses import replace
+
+import IL_mav_carry_ext.tasks.managerbased.mdp as mdp
 import numpy as np
 import torch
 from IL_mav_carry_ext.imitation import FeatureSpec, load_checkpoint
+from IL_mav_carry_ext.plants import FLYCRANE_SIM
 from IL_mav_carry_ext.reporting import TextReporter
 from IL_mav_carry_ext.tasks.managerbased.flycrane.flycrane_env_cfg import VALIDATION
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab_tasks.utils import parse_env_cfg
 
 TASK = "Flycrane-Validation-v0"
@@ -57,6 +71,33 @@ def main():
     # a failed teacher solve says nothing about the student's flight
     env_cfg.terminations.mpc_failed = None
     env_cfg.commands.pose_command.solve_teacher = args_cli.teacher
+    payload = SceneEntityCfg("robot", body_names="load_link")
+    if args_cli.payload_mass_scale != 1.0:
+        env_cfg.events.payload_mass = EventTerm(
+            func=mdp.randomize_rigid_body_mass,
+            mode="startup",
+            params={
+                "asset_cfg": payload,
+                "mass_distribution_params": (args_cli.payload_mass_scale, args_cli.payload_mass_scale),
+                "operation": "scale",
+                "recompute_inertia": True,
+            },
+        )
+    if args_cli.payload_com_offset:
+        offset = (args_cli.payload_com_offset, args_cli.payload_com_offset)
+        env_cfg.events.payload_com = EventTerm(
+            func=mdp.randomize_rigid_body_com, mode="startup", params={"asset_cfg": payload, "com_range": {"x": offset}}
+        )
+    if args_cli.model_cable_length is not None or args_cli.model_attach_offset:
+        drones = tuple(
+            replace(
+                d,
+                cable_length=args_cli.model_cable_length or d.cable_length,
+                attach_point=d.attach_point + np.array([args_cli.model_attach_offset, 0.0, 0.0]),
+            )
+            for d in FLYCRANE_SIM.drones
+        )
+        env_cfg.commands.pose_command.model = replace(FLYCRANE_SIM, drones=drones)
     env = ManagerBasedRLEnv(cfg=env_cfg)
     if spec is not None and spec != FeatureSpec.from_env(env):
         raise ValueError(f"{args_cli.checkpoint} was trained on other rows than {TASK} gives")
