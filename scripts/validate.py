@@ -69,7 +69,7 @@ def main():
     env_cfg = parse_env_cfg(TASK, device=args_cli.device, num_envs=len(names) * args_cli.flights)
     env_cfg.seed = args_cli.seed
     # a failed teacher solve says nothing about the student's flight
-    env_cfg.terminations.mpc_failed = None
+    env_cfg.terminations.teacher_solve_failed = None
     env_cfg.commands.pose_command.solve_teacher = args_cli.teacher
     payload = SceneEntityCfg("robot", body_names="load_link")
     if args_cli.payload_mass_scale != 1.0:

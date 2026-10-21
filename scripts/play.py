@@ -65,7 +65,7 @@ def main():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = args_cli.seed
     # a failed teacher solve says nothing about the student's flight
-    env_cfg.terminations.mpc_failed = None
+    env_cfg.terminations.teacher_solve_failed = None
     env_cfg.commands.pose_command.solve_teacher = args_cli.teacher
 
     env_cfg.viewer.origin_type = "asset_root"

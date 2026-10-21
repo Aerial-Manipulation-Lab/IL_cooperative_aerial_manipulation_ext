@@ -2,10 +2,6 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
-"""Everything around the student, shared by the scripts: building, saving and loading the student, its
-loss, and the recorded datasets."""
-
 import json
 import os
 
@@ -13,18 +9,22 @@ import h5py
 import torch
 
 from .features import PLAN_DIM, PLAN_PARTS, FeatureSpec
+
+# TODO: Rename BCPolicy to more fitting name. Suggest names first
 from .models import BCPolicy
 
 
 def build_model(spec: FeatureSpec, name: str) -> BCPolicy:
-    """An untrained student for the rows `spec` describes."""
+    """Builds a untrained student model based on the input/label spec given."""
+    # when more models become available we add them here
     if name == "mlp":
         return BCPolicy(spec.input_dim, spec.label_dim, hidden=(256, 256, 256))
     raise ValueError(f"unknown student {name!r}")
 
 
+# TODO: rename save_checkpoint to save_model_checkpoint and load_checkpoint tp load_model_checkpoint
 def save_checkpoint(path, model: BCPolicy, spec: FeatureSpec, **extra):
-    """Everything needed to fly the student without the training script."""
+    """Save everything needed to fly the student without the training script."""
     torch.save(
         {
             "model": type(model).__name__,
@@ -38,20 +38,22 @@ def save_checkpoint(path, model: BCPolicy, spec: FeatureSpec, **extra):
 
 
 def load_checkpoint(path, device="cpu") -> tuple[BCPolicy, FeatureSpec, dict]:
-    """(model, the rows it was trained on, the whole checkpoint dict) from `save_checkpoint`."""
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    cfg = ckpt["model_cfg"]
+    """Loads the checkpoint of a model. As saved by save_model_checkpoint"""
+    model_checkpoint = torch.load(path, map_location=device, weights_only=False)
+    cfg = model_checkpoint["model_cfg"]
     model = BCPolicy(cfg["input_dim"], cfg["label_dim"], tuple(cfg["hidden"])).to(device)
-    model.load_state_dict(ckpt["state_dict"])
+    model.load_state_dict(model_checkpoint["state_dict"])
     model.eval()
-    return model, FeatureSpec.from_dict(ckpt["meta"]), ckpt
+    return model, FeatureSpec.from_dict(model_checkpoint["meta"]), model_checkpoint
 
 
+# TODO: rename this to something more descriptivel. This is basically our place to change the loss function
 def bc_loss(model, inputs: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """MSE between the student's prediction and the teacher's label, in physical units as in the thesis."""
+    """Returns the loss we use in the"""
     return torch.nn.functional.mse_loss(model(inputs), labels)
 
 
+# TODO: buffer is also a vague class name
 class Buffer:
     """Every (policy row, label row) example so far, one row per drone and step."""
 
@@ -88,7 +90,7 @@ def fit(model, optimiser, x: torch.Tensor, y: torch.Tensor, epochs: int, batch_s
 
 @torch.no_grad()
 def evaluate(model, x: torch.Tensor, y: torch.Tensor, batch_size: int = 4096) -> dict[str, float]:
-    """The student on examples it hasn't trained on: the loss, and the plan's errors in physical units."""
+    """Evaluate the student model on unseen examples."""
     model.eval()
     num_nodes = y.shape[-1] // PLAN_DIM
     loss, sq_err = 0.0, torch.zeros(num_nodes, PLAN_DIM, device=x.device)

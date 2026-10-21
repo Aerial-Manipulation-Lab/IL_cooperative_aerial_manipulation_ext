@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
@@ -8,12 +9,11 @@ from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import JointWrenchSensorCfg
 from isaaclab.utils.configclass import (
-    configclass,  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
+    configclass,  # Imported explicitly, since isaaclab.utils lazy-exports this name.
 )
 from isaaclab.utils.noise import GaussianNoiseCfg
 from python_mpc_cusadi import Circle, FigureEight, Square
@@ -21,45 +21,85 @@ from python_mpc_cusadi import Circle, FigureEight, Square
 import IL_mav_carry_ext.tasks.managerbased.mdp as mdp
 from IL_mav_carry_ext.assets import FLYCRANE_CFG
 
+VALIDATION = {
+    "RandomTrajectory": mdp.RandomWalk(size=(1.0, 3.0), acceleration=(0.3, 4.5), yaw_rate=(0.0, 0.5)),
+    "FigureEight": mdp.RandomFigureEight(amplitude=(1.0, 2.5), acceleration=(0.5, 4.5), yaw_rate=(-0.3, 0.3)),
+    "Slow": FigureEight(amplitude=2.5, aspect=0.8, period=8 * math.pi),
+    "Medium": FigureEight(amplitude=2.5, aspect=0.8, period=4 * math.pi),
+    "MediumPlus": FigureEight(amplitude=1.0, aspect=1.0, period=2 * math.pi),
+    "Fast": FigureEight(amplitude=2.5, aspect=0.8, period=2 * math.pi),
+    "Circle": Circle(),
+    "Square": Square(),
+}
+"""Every reference a student is checked on, by name.
 
-# Isaac Lab 3.0 folded AdditiveGaussianNoiseCfg into GaussianNoiseCfg(operation="add")
-def Gnoise(**kwargs):
-    return GaussianNoiseCfg(operation="add", **kwargs)
+Each task below flies one of them, and the validation task flies them all at once.
+
+- RandomTrajectory is the general training walk. It spans Medium Plus's room for turns (1.2 m)
+  to Slow's and Medium's (2.7 m), and from below Slow's 0.5 m/s^2 to past Medium Plus's 4.1, so
+  Fast's 8.2 stays unseen. Its heading rate runs from a fixed heading, as the circle has, to past
+  the ladder's steady 0.25 rad/s.
+- FigureEight is the random figure eight. It spans Medium Plus's size to Medium's, and Slow's
+  acceleration to past Medium Plus's, turning either way round.
+- Slow, Medium, MediumPlus and Fast are the agility levels of Sun et al. 2025 (Table 1 and S1),
+  whose NMPC our teacher is. Each is x = A cos(w s), y = B sin(2 w s), yawing at 0.25 rad/s. Their
+  simulated NMPC tracked them to 0.031, 0.067, 0.062 and 0.152 m. The thesis's a2 CSV was Medium,
+  and its a4 was Medium Plus with A 1.25 m.
+- Circle and Square are the thesis's test shapes (6.4.2).
+"""
+
+WALKS_MEDIUM_TO_FAST = (
+    mdp.RandomWalk(size=(2.2, 3.0), acceleration=(1.6, 2.5), yaw_rate=(0.0, 0.5)),
+    mdp.RandomWalk(size=(1.0, 1.5), acceleration=(3.3, 4.9), yaw_rate=(0.0, 0.5)),
+    mdp.RandomWalk(size=(2.2, 3.0), acceleration=(6.6, 9.8), yaw_rate=(0.0, 0.5)),
+)
+"""Random walks at Sun's Medium, Medium Plus and Fast levels, one level per env in turn.
+
+Each walk's room for turns and peak acceleration are within about 20% of its level. With a multiple
+of 3 envs, the three levels get equal shares.
+
+- Medium, 2.7 m and 2.05 m/s^2, peaks offline at about 2.2 m/s and 1.9 m/s^2.
+- Medium Plus, 1.2 m and 4.1 m/s^2, peaks offline at about 2.4 m/s and 4.3 m/s^2.
+- Fast, 2.7 m and 8.2 m/s^2, peaks offline at about 4.6 m/s and 8.4 m/s^2.
+
+The teacher on its own model flies the hardest of these with up to 20 N of thrust per drone.
+"""
 
 
-# Define the scene configuration
+"""
+Scene.
+"""
 
 
 @configclass
-class CarryingSceneCfg(InteractiveSceneCfg):
-    """Configuration for multi-drone lifting system"""
+class FlycraneSceneCfg(InteractiveSceneCfg):
+    """The flycrane, three drones carrying a payload on cables, above a ground plane."""
 
-    # Ground-plane
+    # world
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
-
-    # Lights
     distant_light = AssetBaseCfg(
         prim_path="/World/Light", spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     )
 
-    # Drones
+    # flycrane
     robot: ArticulationCfg = FLYCRANE_CFG.replace(prim_path="{ENV_REGEX_NS}/flycrane")
+    joint_forces = JointWrenchSensorCfg(prim_path="{ENV_REGEX_NS}/flycrane")  # cable forces, for recording
 
-    joint_forces = JointWrenchSensorCfg(prim_path="{ENV_REGEX_NS}/flycrane")
 
-
-# MDP settings
+"""
+Commands.
+"""
 
 
 @configclass
 class ApproachPoseCommandsCfg:
-    """A min-jerk approach to a random payload pose."""
+    """A smooth move of the payload to a random goal pose."""
 
     pose_command = mdp.ApproachPoseCommandCfg(
         asset_name="robot",
         body_name="load_odometry_sensor_link",
         debug_vis=True,
-        ramp_duration=3.0,  # min-jerk ramp: never more than a gentle move away
+        ramp_duration=3.0,  # never more than a gentle move away
         ranges=mdp.ApproachPoseCommandCfg.Ranges(
             pos_x=(-1.0, 1.0),
             pos_y=(-1.0, 1.0),
@@ -71,117 +111,119 @@ class ApproachPoseCommandsCfg:
     )
 
 
-# Every reference a student is checked on, by name. Each task below flies one of them, validation all at once.
-# The ladder is the agility levels of Sun et al. 2025 (Table 1, Table S1), whose NMPC our teacher is: x = A cos(w s),
-# y = B sin(2 w s), yawing at 0.25 rad/s, a lap per 2 pi / w of the clock. Peaks below are on our clock; the paper's
-# simulated NMPC tracked them to 0.031, 0.067, 0.062 and 0.152 m. The thesis's a2 CSV was Medium, its a4 Medium Plus
-# with A 1.25 m.
-VALIDATION = {
-    # the training walk: Medium Plus's 1.2 m to Slow's and Medium's 2.7, below Slow's 0.5 m/s^2 to past Medium Plus's
-    # 4.1 (Fast's 8.2 stays unseen), from a fixed heading, as the circle's, past the ladder's steady 0.25 rad/s
-    "RandomTrajectory": mdp.RandomWalk(size=(1.0, 3.0), acceleration=(0.3, 4.5), yaw_rate=(0.0, 0.5)),
-    # Medium Plus's size to Medium's, Slow's 0.5 m/s^2 to past Medium Plus's 4.1, both ways round
-    "FigureEight": mdp.RandomFigureEight(amplitude=(1.0, 2.5), acceleration=(0.5, 4.5), yaw_rate=(-0.3, 0.3)),
-    "Slow": FigureEight(amplitude=2.5, aspect=0.8, period=8 * math.pi),
-    "Medium": FigureEight(amplitude=2.5, aspect=0.8, period=4 * math.pi),
-    "MediumPlus": FigureEight(amplitude=1.0, aspect=1.0, period=2 * math.pi),
-    "Fast": FigureEight(amplitude=2.5, aspect=0.8, period=2 * math.pi),
-    "Circle": Circle(),
-    "Square": Square(),
-}
-
-
-# Random walks around Sun's Medium, Medium Plus and Fast levels (size v^2/a and peak acceleration within about 20% of
-# each), one band per env, round robin: with a multiple of 3 envs, equal shares. Offline (2026-10-19) they peak at
-# 2.2 / 2.4 / 4.6 m/s and 1.9 / 4.3 / 8.4 m/s^2, the own-model teacher flying the hard ends with up to 20 N of thrust.
-WALKS_MEDIUM_TO_FAST = (
-    mdp.RandomWalk(size=(2.2, 3.0), acceleration=(1.6, 2.5), yaw_rate=(0.0, 0.5)),  # Medium: 2.7 m, 2.05 m/s^2
-    mdp.RandomWalk(size=(1.0, 1.5), acceleration=(3.3, 4.9), yaw_rate=(0.0, 0.5)),  # Medium Plus: 1.2 m, 4.1 m/s^2
-    mdp.RandomWalk(size=(2.2, 3.0), acceleration=(6.6, 9.8), yaw_rate=(0.0, 0.5)),  # Fast: 2.7 m, 8.2 m/s^2
-)
-
-
 @configclass
-class FigureEightCommandsCfg:
-    """A random figure eight, from wherever the payload starts; the other shape tasks swap in their own `shapes`."""
+class ShapeCommandsCfg:
+    """A shape for the payload to fly, from wherever it starts, which each shape task chooses."""
 
     pose_command = mdp.ShapeTrajectoryCommandCfg(
         asset_name="robot",
         body_name="load_odometry_sensor_link",
         debug_vis=True,
-        shapes=(VALIDATION["FigureEight"],),
+        shapes=MISSING,
     )
+
+
+"""
+Actions.
+"""
 
 
 @configclass
 class ActionsCfg:
-    """Actions for the flycrane: each drone's plan in its own frame, as `teacher_plan_rel_drone` gives it.
+    """Each drone's plan relative to itself, which the action term turns into rotor forces.
 
-    The action term adds each drone's position and velocity back and flies node 1 with the
-    geometric and INDI controllers."""
+    The action term adds each drone's position and velocity back to the plan and flies its next
+    node with the geometric and INDI controllers.
+    """
 
     low_level_action: mdp.LowLevelActionCfg = mdp.LowLevelActionCfg(
         asset_name="robot",
         body_name="Falcon.*rotor_.*",
         debug_vis=False,
-        control_mode="geometric",  # node 1's p, v, a, w per drone
+        control_mode="geometric",  # the next node's position, velocity, acceleration and body rate
     )
+
+
+"""
+Observations.
+"""
 
 
 @configclass
 class ObservationsCfg:
-    """Observations for the flycrane."""
+    """What the student sees, and the teacher's plan it learns."""
 
     @configclass
     class PolicyCfg(ObsGroup):
-        """The uniform student's input: (num_envs, num_drones, input_dim), one row per drone.
+        """The student's inputs, one row per drone, of shape (num_envs, num_drones, num_inputs).
 
-        No payload state at all: each drone sees where it should be and how hard its cable should pull (the
-        teacher's own drone reference, from the payload reference alone), where its attach point should be, where
-        that is (its cable as a vector) and how fast it moves, both errors directly, and its own state. The attach
-        point tells the drones apart. No noise on the reference: it is a command, not a measurement.
+        No payload state goes in. Each drone sees:
+
+        - where it should be over the MPC's nodes, and how hard its cable should pull;
+        - where its attach point should be, where it is and how fast it moves;
+        - how far its attach point is from where it should be;
+        - its own orientation and velocities;
+        - where its cable is fixed on the payload, which tells the drones apart.
+
+        The references get no noise, since they are commands and not measurements.
         """
 
+        # references
         drone_ref_horizon = ObsTerm(func=mdp.drone_ref_horizon, params={"command_name": "pose_command"})
         cable_tension_ref_horizon = ObsTerm(func=mdp.cable_tension_ref_horizon, params={"command_name": "pose_command"})
         cable_attach_ref_horizon = ObsTerm(func=mdp.cable_attach_ref_horizon, params={"command_name": "pose_command"})
+
+        # cable
         cable_attach_error = ObsTerm(func=mdp.cable_attach_error, params={"command_name": "pose_command"})
         cable_attach_rel_drone = ObsTerm(func=mdp.cable_attach_rel_drone)
         cable_attach_rel_drone_rate = ObsTerm(func=mdp.cable_attach_rel_drone_rate)
-        drone_orientation = ObsTerm(func=mdp.drone_orientation, noise=Gnoise(std=0.01))
-        drone_linear_velocity = ObsTerm(func=mdp.drone_linear_velocity, noise=Gnoise(std=0.01))
-        drone_angular_velocity = ObsTerm(func=mdp.drone_angular_velocity, noise=Gnoise(std=0.02))
+
+        # drone
+        drone_orientation = ObsTerm(func=mdp.drone_orientation, noise=GaussianNoiseCfg(operation="add", std=0.01))
+        drone_linear_velocity = ObsTerm(
+            func=mdp.drone_linear_velocity, noise=GaussianNoiseCfg(operation="add", std=0.01)
+        )
+        drone_angular_velocity = ObsTerm(
+            func=mdp.drone_angular_velocity, noise=GaussianNoiseCfg(operation="add", std=0.02)
+        )
         cable_attach_point = ObsTerm(func=mdp.cable_attach_point)
 
         def __post_init__(self):
-            self.enable_corruption = False  # for adding noise to the observations
+            """Turn the noise off and join the terms into one row per drone."""
+            self.enable_corruption = False
             self.concatenate_terms = True
 
     @configclass
     class LabelCfg(ObsGroup):
-        """The student's label and the teacher's action: each drone's plan in its own frame,
-        (num_envs, num_drones, num_nodes * 12)."""
+        """The student's label and the teacher's action, each drone's plan relative to itself.
+
+        Its shape is (num_envs, num_drones, num_nodes * 12).
+        """
 
         teacher_plan_rel_drone = ObsTerm(func=mdp.teacher_plan_rel_drone, params={"command_name": "pose_command"})
 
         def __post_init__(self):
+            """Leave the label without noise and join it into one row per drone."""
             self.enable_corruption = False
             self.concatenate_terms = True
 
-    # Observation groups
+    # groups
     policy: PolicyCfg = PolicyCfg()
     label: LabelCfg = LabelCfg()
 
 
+"""
+Events.
+"""
+
+
 @configclass
 class EventCfg:
-    """Events for the flycrane.
+    """What happens to the flycrane at every reset."""
 
-    Resetting states on resets, disturbances, etc.
-    """
-
+    # Every reset puts the flycrane back in its resting shape, then places it at a random spot and
+    # heading, still at rest.
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
-
     reset_base = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
@@ -190,78 +232,69 @@ class EventCfg:
                 "x": (-1.0, 1.0),
                 "y": (-1.0, 1.0),
                 "z": (0.5, 1.5),
-                "roll": (-0, 0),
-                "pitch": (-0, 0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
                 "yaw": (-math.pi, math.pi),
             },
             "velocity_range": {
-                "x": (-0.0, 0.0),
-                "y": (-0.0, 0.0),
-                "z": (-0.0, 0.0),
-                "roll": (-0.0, 0.0),
-                "pitch": (-0.0, 0.0),
-                "yaw": (-0.0, 0.0),
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
             },
         },
     )
 
-    base_external_force_torque = EventTerm(
-        func=mdp.apply_external_force_torque,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "force_range": (0.0, 0.0),
-            "torque_range": (-0.0, 0.0),
-        },
-    )
+
+"""
+Terminations.
+"""
 
 
 @configclass
 class TerminationsCfg:
-    """Terminal conditions for the flycrane.
+    """When an episode ends, by running out of time or by the flycrane getting into trouble."""
 
-    When the payload reaches a certain height, etc."""
-
-    # end when sim times out. Named `success` because Isaac Lab's recorder marks
-    # an episode successful only through a termination term of exactly that
-    # name (and overwrites any flag set by hand right before it exports). So
-    # "success" means the episode ran to its end without crashing or a failed
-    # solve; whether it also ended close to the goal is for the dataset loader
-    # to decide from the recorded states.
+    # The time-out is named success, because Isaac Lab's recorder marks an episode as successful
+    # only through a termination of exactly that name. So success means the episode ran to its
+    # end without a crash or a failed solve.
     success = DoneTerm(func=mdp.time_out, time_out=True)
 
-    mpc_failed = DoneTerm(func=mdp.mpc_failed)
+    teacher_solve_failed = DoneTerm(func=mdp.teacher_solve_failed)
 
-    # end on touching the ground, the one thing a flycrane can hit (self-collisions are off, envs filtered).
-    # From heights, not a contact sensor: its PhysX reading can outlive a reset and end every restart.
-    # 0.2 m for the drones, so one tilted onto an arm is caught too
-    falcon_fly_low = DoneTerm(func=mdp.falcon_fly_low, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.2})
-    payload_fly_low = DoneTerm(
-        func=mdp.payload_fly_low, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.1}
+    # The ground is the one thing a flycrane can hit (self-collisions are off, envs are filtered), so
+    # touching it is caught from heights. A contact sensor is not used because its PhysX reading can
+    # outlive a reset and end every restart. The drones get 0.2 m, so one tilted onto an arm is caught.
+    drone_too_low = DoneTerm(func=mdp.drone_too_low, params={"threshold": 0.2})
+    payload_too_low = DoneTerm(func=mdp.payload_too_low, params={"threshold": 0.1})
+
+    # The thresholds are cosines, 0 allowing 90 degrees at the drone and -sqrt(2)/2 allowing 135 at
+    # the payload.
+    cable_angle_at_drone_too_large = DoneTerm(func=mdp.cable_angle_at_drone_too_large, params={"threshold": 0.0})
+    cable_angle_at_payload_too_large = DoneTerm(
+        func=mdp.cable_angle_at_payload_too_large, params={"threshold": -math.sqrt(2) / 2}
     )
 
-    angle_drones_cable = DoneTerm(
-        func=mdp.cable_angle_drones_cos, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.0}
-    )
-    angle_load_cable = DoneTerm(
-        func=mdp.cable_angle_payload_cos, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": -math.sqrt(2) / 2}
-    )
+    cables_too_close = DoneTerm(func=mdp.cables_too_close, params={"threshold": 0.2, "num_points": 10})
 
-    cables_collide = DoneTerm(
-        func=mdp.cable_collision, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.2, "num_points": 10}
-    )
+    # The thesis counts an episode that stops with two drones closer than 0.4 m as a failure (6.2).
+    drones_too_close = DoneTerm(func=mdp.drones_too_close, params={"threshold": 0.4})
 
-    # the thesis counts an episode that stops with two drones closer than 0.4 m as a failure (6.2)
-    drones_collide = DoneTerm(func=mdp.drone_collision, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4})
+    payload_out_of_bounds = DoneTerm(func=mdp.payload_out_of_bounds, params={"threshold": 5.0})
 
-    bounding_box = DoneTerm(func=mdp.bounding_box, params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 5.0})
+
+"""
+Environments.
+"""
 
 
 @configclass
 class FlycraneEnvCfg(ManagerBasedRLEnvCfg):
-    """The flycrane and its NMPC teacher; each task adds its `commands` and episode length."""
+    """The flycrane with its MPC teacher, to which each task adds its commands and episode length."""
 
-    scene: CarryingSceneCfg = CarryingSceneCfg(num_envs=1, env_spacing=4.0)
+    scene: FlycraneSceneCfg = FlycraneSceneCfg(num_envs=1, env_spacing=4.0)
     actions: ActionsCfg = ActionsCfg()
     observations: ObservationsCfg = ObservationsCfg()
     events: EventCfg = EventCfg()
@@ -269,11 +302,9 @@ class FlycraneEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
 
     def __post_init__(self):
-        """Post initialization."""
-        # general settings
+        """Set the physics to 300 Hz and the policy to every third step, 100 Hz."""
         self.decimation = 3
-        # simulation settings
-        self.sim.dt = 0.0033333333333333335
+        self.sim.dt = 1 / 300
         self.sim.render_interval = self.decimation
         self.sim.gravity = (0.0, 0.0, -9.8066)
 
@@ -285,105 +316,123 @@ class ApproachPoseEnvCfg(FlycraneEnvCfg):
     commands: ApproachPoseCommandsCfg = ApproachPoseCommandsCfg()
 
     def __post_init__(self):
+        """Make the episodes 10 s long."""
         super().__post_init__()
-        # the 3 s ramp plus the ~7 s the MPC takes to settle the swinging payload
-        # (measured with check_student_obs.py --episode_length 20: flat from ~10 s),
-        # so episodes hold the whole manoeuvre but little idle hover
+        # The 3 s move plus the about 7 s the MPC takes to settle the swinging payload, so an
+        # episode holds the whole manoeuvre but little idle hover.
         self.episode_length_s = 10.0
 
 
 @configclass
-class FigureEightEnvCfg(FlycraneEnvCfg):
-    """Carry the payload along a random figure eight."""
+class ShapeEnvCfg(FlycraneEnvCfg):
+    """Carry the payload along a shape for 40 s, from rest, which each task below chooses."""
 
-    commands: FigureEightCommandsCfg = FigureEightCommandsCfg()
+    commands: ShapeCommandsCfg = ShapeCommandsCfg()
 
     def __post_init__(self):
+        """Make the episodes 40 s long and widen the box the payload may fly in."""
         super().__post_init__()
-        self.episode_length_s = 40.0  # the thesis's figure eight, rest to rest
-        # from a spawn up to 1 m off the env origin: a figure up to 5 m long reaches 6 m, a walk within 4 m of its
-        # start along its own x and y, turned any way, 6.7 m
-        self.terminations.bounding_box.params["threshold"] = 7.0
+        self.episode_length_s = 40.0
+        # From a spawn up to 1 m off the env origin, a figure up to 5 m long reaches 6 m, and a walk
+        # within 4 m of its start along its own axes, turned any way, reaches 6.7 m.
+        self.terminations.payload_out_of_bounds.params["threshold"] = 7.0
 
 
 @configclass
-class RandomTrajectoryEnvCfg(FigureEightEnvCfg):
-    """Carry the payload along a random walk, rest to rest: training for every test reference without flying any of
-    their shapes."""
+class FigureEightEnvCfg(ShapeEnvCfg):
+    """Carry the payload along a random figure eight."""
 
     def __post_init__(self):
+        """Fly the random figure eight."""
+        super().__post_init__()
+        self.commands.pose_command.shapes = (VALIDATION["FigureEight"],)
+
+
+@configclass
+class RandomTrajectoryEnvCfg(ShapeEnvCfg):
+    """Carry the payload along a random walk, training for every test reference without flying their shapes."""
+
+    def __post_init__(self):
+        """Fly the general random walk."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["RandomTrajectory"],)
 
 
 @configclass
-class RandomTrajectoryMediumToFastEnvCfg(FigureEightEnvCfg):
-    """Carry the payload along random walks at Medium, Medium Plus and Fast difficulty, in equal shares with a multiple
-    of 3 envs: training up to the hardest test reference, still without flying any of their shapes."""
+class RandomTrajectoryMediumToFastEnvCfg(ShapeEnvCfg):
+    """Carry the payload along random walks at Medium, Medium Plus and Fast difficulty, in equal shares."""
 
     def __post_init__(self):
+        """Fly the three walk levels, one per env in turn."""
         super().__post_init__()
         self.commands.pose_command.shapes = WALKS_MEDIUM_TO_FAST
 
 
 @configclass
-class FigureEightSlowEnvCfg(FigureEightEnvCfg):
-    """Slow: 5 x 4 m, a lap per 25 s, up to 1.2 m/s, 0.5 m/s^2 and 0.3 m/s^3."""
+class FigureEightSlowEnvCfg(ShapeEnvCfg):
+    """Fly Slow, 5 x 4 m with a lap per 25 s, up to 1.2 m/s, 0.5 m/s^2 and 0.3 m/s^3."""
 
     def __post_init__(self):
+        """Fly Slow."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["Slow"],)
 
 
 @configclass
-class FigureEightMediumEnvCfg(FigureEightEnvCfg):
-    """Medium: 5 x 4 m, a lap per 12.6 s, up to 2.4 m/s, 2 m/s^2 and 2 m/s^3."""
+class FigureEightMediumEnvCfg(ShapeEnvCfg):
+    """Fly Medium, 5 x 4 m with a lap per 12.6 s, up to 2.4 m/s, 2 m/s^2 and 2 m/s^3."""
 
     def __post_init__(self):
+        """Fly Medium."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["Medium"],)
 
 
 @configclass
-class FigureEightMediumPlusEnvCfg(FigureEightEnvCfg):
-    """Medium Plus: 2 x 2 m, a lap per 6.3 s, up to 2.2 m/s, 4.1 m/s^2 and 8 m/s^3."""
+class FigureEightMediumPlusEnvCfg(ShapeEnvCfg):
+    """Fly Medium Plus, 2 x 2 m with a lap per 6.3 s, up to 2.2 m/s, 4.1 m/s^2 and 8 m/s^3."""
 
     def __post_init__(self):
+        """Fly Medium Plus."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["MediumPlus"],)
 
 
 @configclass
-class FigureEightFastEnvCfg(FigureEightEnvCfg):
-    """Fast: 5 x 4 m, a lap per 6.3 s, up to 4.7 m/s, 8.2 m/s^2 and 16 m/s^3, leaning 40 degrees."""
+class FigureEightFastEnvCfg(ShapeEnvCfg):
+    """Fly Fast, 5 x 4 m with a lap per 6.3 s, up to 4.7 m/s, 8.2 m/s^2 and 16 m/s^3, leaning 40 degrees."""
 
     def __post_init__(self):
+        """Fly Fast."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["Fast"],)
 
 
 @configclass
-class CircleEnvCfg(FigureEightEnvCfg):
-    """The thesis's test circle (6.4.2): radius 2 m, a lap per 20 s, fixed heading."""
+class CircleEnvCfg(ShapeEnvCfg):
+    """Fly the thesis's test circle (6.4.2), radius 2 m with a lap per 20 s, at a fixed heading."""
 
     def __post_init__(self):
+        """Fly the circle."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["Circle"],)
 
 
 @configclass
-class SquareEnvCfg(FigureEightEnvCfg):
-    """The thesis's test square (6.4.2): 2 m sides, 0.5 m corners, a lap per 10 s, fixed heading."""
+class SquareEnvCfg(ShapeEnvCfg):
+    """Fly the thesis's test square (6.4.2), 2 m sides with 0.5 m corners and a lap per 10 s."""
 
     def __post_init__(self):
+        """Fly the square."""
         super().__post_init__()
         self.commands.pose_command.shapes = (VALIDATION["Square"],)
 
 
 @configclass
-class ValidationEnvCfg(FigureEightEnvCfg):
-    """Every reference in VALIDATION at once: env i flies the i-th, round robin."""
+class ValidationEnvCfg(ShapeEnvCfg):
+    """Fly every reference in VALIDATION at once, env i the i-th in turn."""
 
     def __post_init__(self):
+        """Fly all the references."""
         super().__post_init__()
         self.commands.pose_command.shapes = tuple(VALIDATION.values())

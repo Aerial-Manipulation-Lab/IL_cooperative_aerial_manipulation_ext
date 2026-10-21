@@ -89,3 +89,13 @@ FLYCRANE_CFG = ArticulationCfg(
     },
 )
 """Configuration for the Crazyflie quadcopter."""
+
+
+PAYLOAD_IDX = [1]
+"""Index of the payload body in the flycrane articulation."""
+
+DRONE_IDX = [20, 27, 34]
+"""Indices of the drone bodies in the flycrane articulation."""
+
+CABLE_IDX = [8, 9, 10]
+"""Indices of the cable bodies in the flycrane articulation, one rigid rod per cable."""
