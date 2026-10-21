@@ -34,7 +34,9 @@ def copy_shared_term_to_each_drone(
     return term(env, **(params or {}))[:, None].expand(-1, FLYCRANE_SIM.num_drones, -1)
 
 
-def payload_orientation(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def payload_orientation(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
     """How the payload is rotated, as the rotation matrix from its body frame to the world.
 
     Returns:
@@ -101,7 +103,9 @@ Drones, one row per drone.
 """
 
 
-def drone_orientation(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def drone_orientation(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
     """How each drone is rotated, as the rotation matrix from its body frame to the world.
 
     Returns:
@@ -113,7 +117,9 @@ def drone_orientation(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneE
     return drone_rot_matrix.flatten(-2)
 
 
-def drone_linear_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def drone_linear_velocity(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
     """How fast each drone is moving, in m/s, along the world axes.
 
     Returns:
@@ -123,7 +129,9 @@ def drone_linear_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Sc
     return robot.data.body_com_state_w.torch[:, DRONE_IDX, 7:10]
 
 
-def drone_angular_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def drone_angular_velocity(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
     """How fast each drone is turning, in rad/s, about the world axes.
 
     Returns:
@@ -186,7 +194,9 @@ def cable_attach_point(env: ManagerBasedRLEnv, command_name: str = "pose_command
     return _get_attach_points(env, plant).expand(env.num_envs, -1, -1)
 
 
-def cable_direction(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def cable_direction(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
     """Which way each cable runs, from its attach point up to its drone, along the world axes.
 
     The direction is a unit vector.
@@ -197,7 +207,9 @@ def cable_direction(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnt
     return torch.nn.functional.normalize(-cable_attach_rel_drone(env, asset_cfg), dim=-1)
 
 
-def cable_attach_rel_drone(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def cable_attach_rel_drone(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
     """Where each drone's attach point on the payload is, seen from the drone, in m.
 
     This is the cable as a vector, its direction times its length, along the world axes.
@@ -245,7 +257,9 @@ class cable_attach_rel_drone_rate(ManagerTermBase):
         """
         self.fresh[slice(None) if env_ids is None else env_ids] = True
 
-    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    def __call__(
+        self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    ) -> torch.Tensor:
         """Compute how fast each attach point moves as seen from its drone.
 
         Returns:

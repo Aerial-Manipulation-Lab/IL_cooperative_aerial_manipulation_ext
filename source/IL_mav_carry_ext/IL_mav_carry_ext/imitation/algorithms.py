@@ -39,7 +39,9 @@ class Dagger:
         self.optimiser = torch.optim.Adam(model.parameters(), lr=cfg.lr)
         self.buffer = Buffer()
         self.updates = 0
-        self.steps = self.decisions = self.flown = self.fresh = 0  # this round's, and where its examples start
+        self.steps = self.decisions = self.flown = self.fresh = (
+            0  # this round's, and where its examples start
+        )
 
     def act(self, obs: dict[str, torch.Tensor], ok: torch.Tensor) -> torch.Tensor:
         """This step's action. Every `keep_every`-th step, the examples whose teacher solve succeeded
@@ -64,7 +66,9 @@ class Dagger:
         metrics = {
             "student_share": self.flown / self.decisions if self.decisions else 0.0,
             "gate": self.cfg.gate,
-            "train_loss": fit(self.model, self.optimiser, inputs, labels, self.cfg.epochs, self.cfg.batch_size),
+            "train_loss": fit(
+                self.model, self.optimiser, inputs, labels, self.cfg.epochs, self.cfg.batch_size
+            ),
             "val_loss": validation["val_loss"],
             "node1_vel_err_mps": validation["node1_vel_err_mps"],
             "node1_acc_err_mps2": validation["node1_acc_err_mps2"],
@@ -83,7 +87,9 @@ class BehaviourCloning:
     def __init__(self, model, train_data, val_data, lr: float, batch_size: int):
         self.model = model
         self.optimiser = torch.optim.Adam(model.parameters(), lr=lr)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimiser, factor=0.5, patience=5)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimiser, factor=0.5, patience=5
+        )
         self.train_data, self.val_data, self.batch_size = train_data, val_data, batch_size
 
     def update(self) -> dict[str, float]:

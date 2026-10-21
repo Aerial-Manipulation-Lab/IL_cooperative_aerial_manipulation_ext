@@ -37,7 +37,9 @@ class LowLevelAction(ActionTerm):
         self._robot = env.scene[cfg.asset_name]
         self._body_ids = self._robot.find_bodies(cfg.body_name)[0]
         self._falcon_idx = self._robot.find_bodies("Falcon.*_base_link_inertia")[0]
-        self._sim_dt = self._env.sim.get_rendering_dt()  # TODO: rendering dt has to be the same as planner dt
+        self._sim_dt = (
+            self._env.sim.get_rendering_dt()
+        )  # TODO: rendering dt has to be the same as planner dt
 
         # configuration
         self.cfg = cfg
@@ -56,18 +58,30 @@ class LowLevelAction(ActionTerm):
         self._prev_forces = torch.zeros(self.num_envs, len(self._body_ids), 3, device=self.device)
         self._moments = torch.zeros(self.num_envs, len(self._falcon_idx), 3, device=self.device)
         self._waypoints = torch.zeros(
-            env.num_envs, self._num_drones * self._waypoint_dim * self._num_waypoints, device=self.device
+            env.num_envs,
+            self._num_drones * self._waypoint_dim * self._num_waypoints,
+            device=self.device,
         )
         self._drone_prev_acc = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
         self._drone_jerk = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
         self.drone_setpoint = [{}, {}, {}]
 
         self.drone_positions = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
-        self.drone_orientations = torch.zeros(self.num_envs, self._num_drones, 4, device=self.device)
-        self.drone_linear_velocities = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
-        self.drone_angular_velocities = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
-        self.drone_linear_accelerations = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
-        self.drone_angular_accelerations = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
+        self.drone_orientations = torch.zeros(
+            self.num_envs, self._num_drones, 4, device=self.device
+        )
+        self.drone_linear_velocities = torch.zeros(
+            self.num_envs, self._num_drones, 3, device=self.device
+        )
+        self.drone_angular_velocities = torch.zeros(
+            self.num_envs, self._num_drones, 3, device=self.device
+        )
+        self.drone_linear_accelerations = torch.zeros(
+            self.num_envs, self._num_drones, 3, device=self.device
+        )
+        self.drone_angular_accelerations = torch.zeros(
+            self.num_envs, self._num_drones, 3, device=self.device
+        )
 
         # outer loop controller
         self.geo_controllers = {}
@@ -88,9 +102,15 @@ class LowLevelAction(ActionTerm):
         # experimentally obtained
         self.motor_models = {}
         initial_rpms = [
-            torch.tensor([[1441.5819, 1351.1626, 1341.0111, 1428.5597]], device=self.device).repeat(self.num_envs, 1),
-            torch.tensor([[1377.9199, 1451.8428, 1408.9022, 1329.2014]], device=self.device).repeat(self.num_envs, 1),
-            torch.tensor([[1281.3964, 1293.0708, 1361.7539, 1347.2434]], device=self.device).repeat(self.num_envs, 1),
+            torch.tensor([[1441.5819, 1351.1626, 1341.0111, 1428.5597]], device=self.device).repeat(
+                self.num_envs, 1
+            ),
+            torch.tensor([[1377.9199, 1451.8428, 1408.9022, 1329.2014]], device=self.device).repeat(
+                self.num_envs, 1
+            ),
+            torch.tensor([[1281.3964, 1293.0708, 1361.7539, 1347.2434]], device=self.device).repeat(
+                self.num_envs, 1
+            ),
         ]
         for i in range(self._num_drones):
             self.motor_models[i] = RotorMotor(self.num_envs, initial_rpms[i])
@@ -107,8 +127,12 @@ class LowLevelAction(ActionTerm):
 
         # debug
         if cfg.debug_vis:
-            self.drone_positions_debug = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
-            self.drone_goals_debug = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
+            self.drone_positions_debug = torch.zeros(
+                self.num_envs, self._num_drones, 3, device=self.device
+            )
+            self.drone_goals_debug = torch.zeros(
+                self.num_envs, self._num_drones, 3, device=self.device
+            )
             self.des_acc_debug = torch.zeros(self.num_envs, self._num_drones, 3, device=self.device)
             self.des_ori_debug = torch.zeros(self.num_envs, self._num_drones, 4, device=self.device)
 
@@ -132,7 +156,13 @@ class LowLevelAction(ActionTerm):
         super().reset(env_ids)
         # back to the startup state: INDI builds on the current rotor forces, so rotors left saturated
         # by a crash would otherwise flip the drones again right after every restart
-        for buf in (self._forces, self._moments, self._prev_forces, self._drone_prev_acc, self._drone_jerk):
+        for buf in (
+            self._forces,
+            self._moments,
+            self._prev_forces,
+            self._drone_prev_acc,
+            self._drone_jerk,
+        ):
             buf[env_ids] = 0.0
         for i in range(self._num_drones):
             self.geo_controllers[i].reset(env_ids)
@@ -148,7 +178,9 @@ class LowLevelAction(ActionTerm):
                 velocity now taken off p and v. They are added back here."""
         self._raw_actions[:] = actions
         drones = self._robot.data.body_com_state_w.torch[:, self._falcon_idx]
-        node1 = actions.reshape(self.num_envs, self._num_drones, self._num_nodes, 12)[:, :, 1].clone()
+        node1 = actions.reshape(self.num_envs, self._num_drones, self._num_nodes, 12)[
+            :, :, 1
+        ].clone()
         node1[..., 0:3] += drones[..., :3] - self._env.scene.env_origins[:, None]
         node1[..., 3:6] += drones[..., 7:10]
         self._waypoints = node1.flatten(1)
@@ -170,7 +202,9 @@ class LowLevelAction(ActionTerm):
 
             elif self._control_mode == "ACCBR":
                 self.drone_setpoint[i]["lin_acc"] = drone_waypoints[:, :3]
-                self.drone_setpoint[i]["body_rates"] = torch.cat((drone_waypoints[:, 3:], self._constant_yaw), dim=-1)
+                self.drone_setpoint[i]["body_rates"] = torch.cat(
+                    (drone_waypoints[:, 3:], self._constant_yaw), dim=-1
+                )
 
             self.drone_setpoint[i]["yaw"] = self._constant_yaw
             self.drone_setpoint[i]["yaw_rate"] = self._constant_yaw
@@ -185,14 +219,26 @@ class LowLevelAction(ActionTerm):
             drone_positions = self._env.scene["robot"].data.body_com_state_w.torch[
                 :, self._falcon_idx, :3
             ] - self._env.scene.env_origins.unsqueeze(1)
-            drone_orientations = self._env.scene["robot"].data.body_com_state_w.torch[:, self._falcon_idx, 3:7]
-            drone_linear_velocities = self._env.scene["robot"].data.body_com_state_w.torch[:, self._falcon_idx, 7:10]
-            drone_angular_velocities = self._env.scene["robot"].data.body_com_state_w.torch[:, self._falcon_idx, 10:13]
-            drone_linear_accelerations = self._env.scene["robot"].data.body_acc_w.torch[:, self._falcon_idx, :3]
-            drone_angular_accelerations = self._env.scene["robot"].data.body_acc_w.torch[:, self._falcon_idx, 3:6]
+            drone_orientations = self._env.scene["robot"].data.body_com_state_w.torch[
+                :, self._falcon_idx, 3:7
+            ]
+            drone_linear_velocities = self._env.scene["robot"].data.body_com_state_w.torch[
+                :, self._falcon_idx, 7:10
+            ]
+            drone_angular_velocities = self._env.scene["robot"].data.body_com_state_w.torch[
+                :, self._falcon_idx, 10:13
+            ]
+            drone_linear_accelerations = self._env.scene["robot"].data.body_acc_w.torch[
+                :, self._falcon_idx, :3
+            ]
+            drone_angular_accelerations = self._env.scene["robot"].data.body_acc_w.torch[
+                :, self._falcon_idx, 3:6
+            ]
 
             # Apply Gaussian noise with correctly sized tensors
-            self.drone_positions[:] = drone_positions  # + torch.randn_like(drone_positions) * self.position_noise_std
+            self.drone_positions[:] = (
+                drone_positions  # + torch.randn_like(drone_positions) * self.position_noise_std
+            )
             self.drone_orientations[:] = (
                 drone_orientations  # + torch.randn_like(drone_orientations) * self.orientation_noise_std
             )
@@ -228,7 +274,9 @@ class LowLevelAction(ActionTerm):
                 drone_states["lin_acc"] = self.drone_linear_accelerations[:, i]
                 drone_states["ang_acc"] = self.drone_angular_accelerations[:, i]
                 # calculate current jerk and snap
-                self._drone_jerk[:, i] = (drone_states["lin_acc"] - self._drone_prev_acc[:, i]) / (self._sim_dt)
+                self._drone_jerk[:, i] = (drone_states["lin_acc"] - self._drone_prev_acc[:, i]) / (
+                    self._sim_dt
+                )
                 drone_states["jerk"] = self._drone_jerk[:, i]
                 self._drone_prev_acc[:, i] = drone_states["lin_acc"]
 
@@ -240,12 +288,18 @@ class LowLevelAction(ActionTerm):
                 )
 
                 if self.cfg.debug_vis:
-                    self.drone_positions_debug[:, i] = drone_states["pos"] + self._env.scene.env_origins
+                    self.drone_positions_debug[:, i] = (
+                        drone_states["pos"] + self._env.scene.env_origins
+                    )
                     if self._control_mode == "geometric":
-                        self.drone_goals_debug[:, i] = self.drone_setpoint[i]["pos"] + self._env.scene.env_origins
+                        self.drone_goals_debug[:, i] = (
+                            self.drone_setpoint[i]["pos"] + self._env.scene.env_origins
+                        )
                     self.des_acc_debug[:, i] = acc_cmd
                     self.des_ori_debug[:, i] = q_cmd
-                thrusts, moments = self.motor_models[i].get_motor_thrusts_moments(target_rpm, self.sampling_time)
+                thrusts, moments = self.motor_models[i].get_motor_thrusts_moments(
+                    target_rpm, self.sampling_time
+                )
                 all_thrusts.append(thrusts)
                 all_moments.append(moments)
 
@@ -261,9 +315,13 @@ class LowLevelAction(ActionTerm):
         robot = self._env.scene["robot"]
         robot.permanent_wrench_composer.reset()
         # apply torques induced by rotors to each body
-        robot.permanent_wrench_composer.add_forces_and_torques(torques=self._moments, body_ids=self._falcon_idx)
+        robot.permanent_wrench_composer.add_forces_and_torques(
+            torques=self._moments, body_ids=self._falcon_idx
+        )
         # apply forces to each rotor
-        robot.permanent_wrench_composer.add_forces_and_torques(forces=self._forces, body_ids=self._body_ids)
+        robot.permanent_wrench_composer.add_forces_and_torques(
+            forces=self._forces, body_ids=self._body_ids
+        )
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers
@@ -310,7 +368,9 @@ class LowLevelAction(ActionTerm):
 
         # Get drone positions and orientations
         rotor_idx = self._body_ids
-        rotor_pos_world_frame = self._robot.data.body_com_state_w.torch[:, rotor_idx, :3].view(-1, 3)
+        rotor_pos_world_frame = self._robot.data.body_com_state_w.torch[:, rotor_idx, :3].view(
+            -1, 3
+        )
         rotor_orientation = self._robot.data.body_com_state_w.torch[:, rotor_idx, 3:7].view(-1, 4)
 
         # marker indices for multiple envs
@@ -322,7 +382,9 @@ class LowLevelAction(ActionTerm):
         )  # rotate -90 degrees around y-axis in the world frame
 
         # Apply the offset in the drone's local frame by multiplying with drone's orientation
-        arrow_rotation_offset = arrow_rotation.repeat(1, len(rotor_idx), 1).to(self.device).view(-1, 4)
+        arrow_rotation_offset = (
+            arrow_rotation.repeat(1, len(rotor_idx), 1).to(self.device).view(-1, 4)
+        )
         arrow_orientation = math_utils.quat_mul(rotor_orientation, arrow_rotation_offset)
 
         # scale arrows with applied force
@@ -342,16 +404,23 @@ class LowLevelAction(ActionTerm):
             (self.drone_positions_debug, self.drone_goals_debug), dim=0
         )  # visualize the payload positions in world frame
         marker_idx = (
-            [0] * self.num_envs * self._num_drones + [1] * self.num_envs + [2] * self.num_envs + [3] * self.num_envs
+            [0] * self.num_envs * self._num_drones
+            + [1] * self.num_envs
+            + [2] * self.num_envs
+            + [3] * self.num_envs
         )
-        self.drone_pos_marker.visualize(translations=positions.view(-1, 3), marker_indices=marker_idx)
+        self.drone_pos_marker.visualize(
+            translations=positions.view(-1, 3), marker_indices=marker_idx
+        )
 
         # drone desired accelerations
 
         # Normalize the desired direction vector (which represents the direction)
         acc_orientation_axis = normalize(self.des_acc_debug)
         # Define the default x-axis (the direction the arrow marker points to by default)
-        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, self._num_drones, 1)
+        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(
+            self.num_envs, self._num_drones, 1
+        )
         # Compute the dot product between x-axis and desired direction to check alignment
         cos_angle = torch.sum(x_axis * acc_orientation_axis, dim=-1)
         # Flip the desired direction if the dot product is negative (indicating opposite direction)
@@ -370,7 +439,9 @@ class LowLevelAction(ActionTerm):
             normalize(rotation_axis),
         )
         # Compute the quaternion from the angle-axis representation
-        acc_orientation = quat_from_angle_axis(angle.view(-1), rotation_axis.view(-1, 3)).view(-1, 4)
+        acc_orientation = quat_from_angle_axis(angle.view(-1), rotation_axis.view(-1, 3)).view(
+            -1, 4
+        )
 
         # Visualize the arrow marker with the new orientation
         self.acc_marker.visualize(

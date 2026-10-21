@@ -72,15 +72,22 @@ class MpcTeacher:
             load = self._load_state(rows[j, 0], origins[j], stime)
             drones = [
                 DroneState(
-                    time=stime, p=r[:3] - origins[j] + Rotation.from_quat(r[3:7]).apply(ROPE_END), v=r[7:10], w=r[10:13]
+                    time=stime,
+                    p=r[:3] - origins[j] + Rotation.from_quat(r[3:7]).apply(ROPE_END),
+                    v=r[7:10],
+                    w=r[10:13],
                 )
                 for r in rows[j, 1:]
             ]
             return self.policies[env_ids[j]].solve(stime, load, drones)
 
-        for i, (drones, load, status) in zip(env_ids, self._pool.map(solve, range(len(env_ids))), strict=True):
+        for i, (drones, load, status) in zip(
+            env_ids, self._pool.map(solve, range(len(env_ids))), strict=True
+        ):
             self._ok[i] = status == OCPStatus.SUCCESS
-            self._plan[i] = np.concatenate([drones.p, drones.v, drones.a, drones.w], axis=-1).transpose(1, 0, 2)
+            self._plan[i] = np.concatenate(
+                [drones.p, drones.v, drones.a, drones.w], axis=-1
+            ).transpose(1, 0, 2)
             self.load_plan[i] = np.concatenate([load.p, load.q], axis=-1)
             self.tension[i] = self.policies[i].warm_start.cable_prediction.t[0]
         self._publish()

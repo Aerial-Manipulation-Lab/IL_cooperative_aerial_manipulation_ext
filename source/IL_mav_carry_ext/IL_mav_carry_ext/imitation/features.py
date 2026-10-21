@@ -39,7 +39,9 @@ class FeatureSpec:
         """The spec of `env`'s policy and label groups."""
         manager = env.observation_manager
         teacher = env.command_manager.get_term("pose_command").teacher
-        terms = zip(manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=True)
+        terms = zip(
+            manager.active_terms["policy"], manager.group_obs_term_dim["policy"], strict=True
+        )
         return cls(
             policy_terms=tuple((name, int(dims[-1])) for name, dims in terms),
             num_drones=teacher.num_drones,
@@ -85,7 +87,9 @@ class FeatureSpec:
             if name == term:
                 return slice(start, start + dim)
             start += dim
-        raise KeyError(f"{term!r} is not a policy term; they are {[name for name, _ in self.policy_terms]}")
+        raise KeyError(
+            f"{term!r} is not a policy term; they are {[name for name, _ in self.policy_terms]}"
+        )
 
     def plan(self, label: torch.Tensor) -> torch.Tensor:
         """Label rows (..., label_dim) as plans (..., num_nodes, PLAN_DIM): `spec.plan(y)[..., 1, PLAN_PARTS["v"]]`

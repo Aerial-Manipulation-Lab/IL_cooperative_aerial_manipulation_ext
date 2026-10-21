@@ -18,24 +18,35 @@ parser.add_argument(
     help="Flycrane-ApproachPose-v0, Flycrane-RandomTrajectory-v0, -RandomTrajectoryMediumToFast-v0, Flycrane-FigureEight-v0 (random), Flycrane-FigureEightSlow-v0, -FigureEightMedium-v0, -FigureEightMediumPlus-v0, -FigureEightFast-v0, Flycrane-Circle-v0, Flycrane-Square-v0.",
 )
 parser.add_argument(
-    "--run_name", type=str, required=True, help="Name of directory under logs/dagger. Stores run in this directory."
+    "--run_name",
+    type=str,
+    required=True,
+    help="Name of directory under logs/dagger. Stores run in this directory.",
 )
-parser.add_argument("--overwrite", action="store_true", default=False, help="Replace an existing run of that name.")
+parser.add_argument(
+    "--overwrite", action="store_true", default=False, help="Replace an existing run of that name."
+)
 parser.add_argument(
     "--iterations",
     type=int,
     default=25,
     help="Number dagger rounds. Each round trains on a full flight, staggered by the number of envs.",
 )
-parser.add_argument("--num_envs", type=int, default=8, help="Number of flycranes flying in parallel.")
-parser.add_argument("--epochs", type=int, default=16, help="Passes over every example aggregated so far, per round.")
+parser.add_argument(
+    "--num_envs", type=int, default=8, help="Number of flycranes flying in parallel."
+)
+parser.add_argument(
+    "--epochs", type=int, default=16, help="Passes over every example aggregated so far, per round."
+)
 parser.add_argument(
     "--keep_every",
     type=int,
     default=10,
     help="Train on every Nth simulation step. Each step is recorded into a recorded dataset regardles.",
 )
-parser.add_argument("--model", choices=["mlp"], default="mlp", help="Student network, see build_model.")
+parser.add_argument(
+    "--model", choices=["mlp"], default="mlp", help="Student network, see build_model."
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -64,7 +75,14 @@ from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
 
 ROUND_FLIGHT_S = 40.0
-ROUND_LINE = ("student_share", "gate", "train_loss", "val_loss", "node1_vel_err_mps", "node1_acc_err_mps2")
+ROUND_LINE = (
+    "student_share",
+    "gate",
+    "train_loss",
+    "val_loss",
+    "node1_vel_err_mps",
+    "node1_acc_err_mps2",
+)
 """The round's numbers the console shows, in order; TensorBoard gets them all."""
 
 
@@ -74,7 +92,9 @@ def main():
 
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = 42
-    env_cfg.recorders = MpcRecorderManagerCfg(dataset_export_dir_path=run_dir, dataset_filename="rollouts")
+    env_cfg.recorders = MpcRecorderManagerCfg(
+        dataset_export_dir_path=run_dir, dataset_filename="rollouts"
+    )
     env = ManagerBasedRLEnv(cfg=env_cfg)
     teacher = env.command_manager.get_term("pose_command").teacher
     spec = FeatureSpec.from_env(env)
@@ -87,12 +107,16 @@ def main():
     steps = round(ROUND_FLIGHT_S / (num_envs * env.step_dt))
 
     tensorboard = TensorBoardReporter(run_dir)
-    report.info(f"{args_cli.iterations} rounds of {steps} steps on {num_envs} envs; logging to {run_dir}")
+    report.info(
+        f"{args_cli.iterations} rounds of {steps} steps on {num_envs} envs; logging to {run_dir}"
+    )
 
     obs, _ = env.reset()
     # cut each env's first episode short by a different 1/num_envs, so from then on they fly
     # different parts of it and every round holds the whole episode once
-    env.episode_length_buf[:] = torch.arange(num_envs, device=env.device) * int(env.max_episode_length) // num_envs
+    env.episode_length_buf[:] = (
+        torch.arange(num_envs, device=env.device) * int(env.max_episode_length) // num_envs
+    )
     episodes = EpisodeLog()
     for rnd in range(args_cli.iterations):
         if not simulation_app.is_running():
@@ -101,10 +125,19 @@ def main():
         for _ in range(steps):
             obs, _, terminated, truncated, extras = env.step(dagger.act(obs, teacher.ok))
             episodes.add(extras, terminated | truncated)
-        metrics = {**dagger.update(), "round_min": (time.time() - round_start) / 60, **episodes.means()}
-        report.metrics(f"round {rnd}/{args_cli.iterations}", {k: metrics[k] for k in ROUND_LINE if k in metrics})
+        metrics = {
+            **dagger.update(),
+            "round_min": (time.time() - round_start) / 60,
+            **episodes.means(),
+        }
+        report.metrics(
+            f"round {rnd}/{args_cli.iterations}",
+            {k: metrics[k] for k in ROUND_LINE if k in metrics},
+        )
         tensorboard.metrics(metrics, rnd)
-        save_checkpoint(os.path.join(run_dir, f"round_{rnd:03d}.pt"), model, spec, round=rnd, metrics=metrics)
+        save_checkpoint(
+            os.path.join(run_dir, f"round_{rnd:03d}.pt"), model, spec, round=rnd, metrics=metrics
+        )
 
     tensorboard.close()
     env.close()

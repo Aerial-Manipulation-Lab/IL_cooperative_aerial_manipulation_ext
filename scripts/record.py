@@ -24,16 +24,24 @@ parser.add_argument(
     help="Flycrane-ApproachPose-v0, Flycrane-RandomTrajectory-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightSlow-v0, -FigureEightMedium-v0, -FigureEightMediumPlus-v0, -FigureEightFast-v0, -Circle-v0, -Square-v0.",
 )
 parser.add_argument("--num_envs", type=int, default=8, help="Flycranes flying in parallel.")
-parser.add_argument("--num_episodes", type=int, default=200, help="Stop once this many episodes are written.")
+parser.add_argument(
+    "--num_episodes", type=int, default=200, help="Stop once this many episodes are written."
+)
 parser.add_argument(
     "--output",
     type=str,
     default="logs/record/mpc_demos",
     help="Dataset path without extension; .hdf5 and .meta.json are added.",
 )
-parser.add_argument("--seed", type=int, default=0, help="Env seed; use a different one per run to merge.")
-parser.add_argument("--overwrite", action="store_true", default=False, help="Replace an existing dataset.")
-parser.add_argument("--rebuild", action="store_true", default=False, help="Regenerate the acados solver first.")
+parser.add_argument(
+    "--seed", type=int, default=0, help="Env seed; use a different one per run to merge."
+)
+parser.add_argument(
+    "--overwrite", action="store_true", default=False, help="Replace an existing dataset."
+)
+parser.add_argument(
+    "--rebuild", action="store_true", default=False, help="Regenerate the acados solver first."
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -97,10 +105,14 @@ def main():
     steps = 0
     while simulation_app.is_running() and written() < args_cli.num_episodes:
         with torch.inference_mode():
-            obs, _, terminated, truncated, extras = env.step(obs["label"].flatten(1))  # the teacher flies its plan
+            obs, _, terminated, truncated, extras = env.step(
+                obs["label"].flatten(1)
+            )  # the teacher flies its plan
         steps += 1
         if bool((terminated | truncated).any()):
-            report.metrics("episodes ended", {"written": written(), **episode_numbers(extras["log"])})
+            report.metrics(
+                "episodes ended", {"written": written(), **episode_numbers(extras["log"])}
+            )
 
         if progress.due():
             elapsed = time.time() - start

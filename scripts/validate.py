@@ -20,18 +20,37 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Validate a student or the teacher on every test reference.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint from scripts/train.py or dagger.py.")
-parser.add_argument("--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline.")
-parser.add_argument("--flights", type=int, default=1, help="Flights per reference, each from its own random start.")
-parser.add_argument("--seed", type=int, default=0, help="The same seed gives the same starts and random draws.")
-# a plant unlike the model: the sim's payload changed, every controller keeping its model
-parser.add_argument("--payload_mass_scale", type=float, default=1.0, help="The sim payload's mass, times this.")
-parser.add_argument("--payload_com_offset", type=float, default=0.0, help="The sim payload's COM moved along x, m.")
-# a model unlike the plant: the teacher and every model-based input assume this, the sim unchanged
-parser.add_argument("--model_cable_length", type=float, default=None, help="The model's cable length, m.")
+parser = argparse.ArgumentParser(
+    description="Validate a student or the teacher on every test reference."
+)
 parser.add_argument(
-    "--model_attach_offset", type=float, default=0.0, help="The model's attach points moved along x, m."
+    "--checkpoint", type=str, default=None, help="Checkpoint from scripts/train.py or dagger.py."
+)
+parser.add_argument(
+    "--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline."
+)
+parser.add_argument(
+    "--flights", type=int, default=1, help="Flights per reference, each from its own random start."
+)
+parser.add_argument(
+    "--seed", type=int, default=0, help="The same seed gives the same starts and random draws."
+)
+# a plant unlike the model: the sim's payload changed, every controller keeping its model
+parser.add_argument(
+    "--payload_mass_scale", type=float, default=1.0, help="The sim payload's mass, times this."
+)
+parser.add_argument(
+    "--payload_com_offset", type=float, default=0.0, help="The sim payload's COM moved along x, m."
+)
+# a model unlike the plant: the teacher and every model-based input assume this, the sim unchanged
+parser.add_argument(
+    "--model_cable_length", type=float, default=None, help="The model's cable length, m."
+)
+parser.add_argument(
+    "--model_attach_offset",
+    type=float,
+    default=0.0,
+    help="The model's attach points moved along x, m.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -64,7 +83,11 @@ TASK = "Flycrane-Validation-v0"
 
 def main():
     report = TextReporter("validate")
-    student, spec = (None, None) if args_cli.teacher else load_checkpoint(args_cli.checkpoint, args_cli.device)[:2]
+    student, spec = (
+        (None, None)
+        if args_cli.teacher
+        else load_checkpoint(args_cli.checkpoint, args_cli.device)[:2]
+    )
     names = list(VALIDATION)
     env_cfg = parse_env_cfg(TASK, device=args_cli.device, num_envs=len(names) * args_cli.flights)
     env_cfg.seed = args_cli.seed
@@ -78,7 +101,10 @@ def main():
             mode="startup",
             params={
                 "asset_cfg": payload,
-                "mass_distribution_params": (args_cli.payload_mass_scale, args_cli.payload_mass_scale),
+                "mass_distribution_params": (
+                    args_cli.payload_mass_scale,
+                    args_cli.payload_mass_scale,
+                ),
                 "operation": "scale",
                 "recompute_inertia": True,
             },
@@ -86,7 +112,9 @@ def main():
     if args_cli.payload_com_offset:
         offset = (args_cli.payload_com_offset, args_cli.payload_com_offset)
         env_cfg.events.payload_com = EventTerm(
-            func=mdp.randomize_rigid_body_com, mode="startup", params={"asset_cfg": payload, "com_range": {"x": offset}}
+            func=mdp.randomize_rigid_body_com,
+            mode="startup",
+            params={"asset_cfg": payload, "com_range": {"x": offset}},
         )
     if args_cli.model_cable_length is not None or args_cli.model_attach_offset:
         drones = tuple(
@@ -116,7 +144,9 @@ def main():
         ended = (terminated | truncated) & ~done
         for i in ended.nonzero().flatten().tolist():
             ended_by = next(t for t in terminations.active_terms if terminations.get_term(t)[i])
-            flights.append((names[i % len(names)], {k: float(v[i]) for k, v in before.items()}, ended_by))
+            flights.append(
+                (names[i % len(names)], {k: float(v[i]) for k, v in before.items()}, ended_by)
+            )
         done |= ended
     env.close()
 

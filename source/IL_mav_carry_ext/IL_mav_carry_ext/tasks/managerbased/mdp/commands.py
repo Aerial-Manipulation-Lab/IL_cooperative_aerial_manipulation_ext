@@ -147,7 +147,9 @@ class MpcCommand(CommandTerm):
         measured = self.robot.data.body_com_state_w.torch[ids, self.body_idx].cpu().numpy()
         origins = self._env.scene.env_origins[ids].cpu().numpy()
         for j, i in enumerate(ids):
-            start = LoadState(time=self._get_time(), p=measured[j, :3] - origins[j], q=measured[j, 3:7])
+            start = LoadState(
+                time=self._get_time(), p=measured[j, :3] - origins[j], q=measured[j, 3:7]
+            )
             self.references[i] = self._build_reference(i, start)
             self.teacher.reset(i, self.references[i])
             self.drone_references[i] = self._compute_drone_reference(i)
@@ -171,7 +173,8 @@ class MpcCommand(CommandTerm):
         pos_error, rot_error = compute_pose_error(
             self.pose_command_w[:, :3],
             self.pose_command_w[:, 3:],
-            self.robot.data.body_com_state_w.torch[:, self.body_idx, :3] - self._env.scene.env_origins,
+            self.robot.data.body_com_state_w.torch[:, self.body_idx, :3]
+            - self._env.scene.env_origins,
             self.robot.data.body_com_state_w.torch[:, self.body_idx, 3:7],
         )
         n = self._env.episode_length_buf.clamp(min=1)
@@ -289,9 +292,13 @@ class ApproachPoseCommand(MpcCommand):
         """
         ids = torch.arange(self.num_envs, device=self.device)[env_ids]
         r = self.cfg.ranges
-        bounds = torch.tensor([r.pos_x, r.pos_y, r.pos_z, r.roll, r.pitch, r.yaw], device=self.device)
+        bounds = torch.tensor(
+            [r.pos_x, r.pos_y, r.pos_z, r.roll, r.pitch, r.yaw], device=self.device
+        )
         x = sample_uniform(bounds[:, 0], bounds[:, 1], (len(ids), 6), device=self.device)
-        self.goals[ids] = torch.cat([x[:, :3], quat_from_euler_xyz(x[:, 3], x[:, 4], x[:, 5])], dim=-1)
+        self.goals[ids] = torch.cat(
+            [x[:, :3], quat_from_euler_xyz(x[:, 3], x[:, 4], x[:, 5])], dim=-1
+        )
         super()._resample_command(ids)
 
     def _build_reference(self, env_id: int, start: LoadState) -> LoadTrajectory:
@@ -307,7 +314,11 @@ class ApproachPoseCommand(MpcCommand):
         goal = self.goals[env_id].cpu().numpy()
         goal = LoadState(time=start.time, p=goal[:3], q=goal[3:])
         return Approach(
-            start=start, goal=goal, duration=self.cfg.ramp_duration, dt=self._env.step_dt, time_offset=start.time
+            start=start,
+            goal=goal,
+            duration=self.cfg.ramp_duration,
+            dt=self._env.step_dt,
+            time_offset=start.time,
         ).build()
 
 
@@ -359,7 +370,9 @@ class ShapeTrajectoryCommand(MpcCommand):
             The shape, still around the origin and at heading 0.
         """
         entry = self.cfg.shapes[env_id % len(self.cfg.shapes)]
-        return entry if isinstance(entry, Shape) else entry.draw(start, self._env.max_episode_length_s)
+        return (
+            entry if isinstance(entry, Shape) else entry.draw(start, self._env.max_episode_length_s)
+        )
 
     def _build_reference(self, env_id: int, start: LoadState) -> LoadTrajectory:
         """Build the env's shape as a reference, starting at the payload and turned to its heading.
@@ -375,7 +388,10 @@ class ShapeTrajectoryCommand(MpcCommand):
         # reference, and has one sample per step, so the MPC never aims a whole sample ahead.
         duration = self._env.max_episode_length_s + self.teacher.policies[0].horizon.Tf
         f = replace(self._get_shape(env_id, start), duration=duration, dt=self._env.step_dt).build()
-        yaw = Rotation.from_quat(start.q).as_euler("ZYX")[0] - Rotation.from_quat(f.q[0]).as_euler("ZYX")[0]
+        yaw = (
+            Rotation.from_quat(start.q).as_euler("ZYX")[0]
+            - Rotation.from_quat(f.q[0]).as_euler("ZYX")[0]
+        )
         turn = Rotation.from_euler("z", yaw)
         return LoadTrajectory(
             time=f.time + start.time,

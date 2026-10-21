@@ -21,7 +21,9 @@ class GeometricController:
         self.num_envs = num_envs
         self.control_mode = control_mode
 
-        self.p_err_max_ = torch.full((self.num_envs, 3), torch.finfo(torch.float32).max, device=self.device)
+        self.p_err_max_ = torch.full(
+            (self.num_envs, 3), torch.finfo(torch.float32).max, device=self.device
+        )
         self.v_err_max_ = torch.full(
             (
                 self.num_envs,
@@ -32,7 +34,9 @@ class GeometricController:
         )
 
         self.rope_offset = -0.03
-        self.p_offset = torch.tensor([[0.0, 0.0, self.rope_offset]] * self.num_envs, device=self.device)
+        self.p_offset = torch.tensor(
+            [[0.0, 0.0, self.rope_offset]] * self.num_envs, device=self.device
+        )
         self.integration_max = torch.tensor([0.0, 0.0, 0.0], device=self.device)
 
         # sim and drone parameters
@@ -71,7 +75,9 @@ class GeometricController:
             self.filter_cutoff_frequency, self.filter_sampling_frequency, self.filter_init_value_mot
         )
         self.filterRate_ = LowPassFilter(
-            self.filter_cutoff_frequency_bodyrate, self.filter_sampling_frequency, self.filter_init_value_rate
+            self.filter_cutoff_frequency_bodyrate,
+            self.filter_sampling_frequency,
+            self.filter_init_value_rate,
         )
 
         # debug
@@ -117,7 +123,9 @@ class GeometricController:
         if self.control_mode == "geometric":
             p_ref_cg = setpoint["pos"] - quat_apply(state["quat"], self.p_offset)
             pos_error = torch.clamp(p_ref_cg - state["pos"], -self.p_err_max_, self.p_err_max_)
-            vel_error = torch.clamp(setpoint["lin_vel"] - state["lin_vel"], -self.v_err_max_, self.v_err_max_)
+            vel_error = torch.clamp(
+                setpoint["lin_vel"] - state["lin_vel"], -self.v_err_max_, self.v_err_max_
+            )
             des_acc = self.kp_acc * pos_error + self.kd_acc * vel_error + setpoint["lin_acc"]
 
         elif self.control_mode == "ACCBR":
@@ -125,7 +133,9 @@ class GeometricController:
 
         # estimation of load acceleration in world frame
         acc_load = (
-            state["lin_acc"] - self.gravity - quat_apply(state["quat"], current_collective_thrust / self.falcon_mass)
+            state["lin_acc"]
+            - self.gravity
+            - quat_apply(state["quat"], current_collective_thrust / self.falcon_mass)
         )
 
         if self.debug:
@@ -139,14 +149,17 @@ class GeometricController:
         # finite quaternion), so one such environment would poison the whole batch. Fall back to
         # the world up axis, i.e. hold a level attitude when no acceleration is commanded.
         degenerate = z_b_des.norm(dim=-1, keepdim=True) < 0.5
-        z_b_des = torch.where(degenerate, torch.tensor([0.0, 0.0, 1.0], device=z_b_des.device), z_b_des)
+        z_b_des = torch.where(
+            degenerate, torch.tensor([0.0, 0.0, 1.0], device=z_b_des.device), z_b_des
+        )
 
         # attitude command
         # Calculate the desired quaternion
         setpoint_yaw = setpoint["yaw"]
         # calculate intermediate axis and new desired body frame
         x_intermediate_des = torch.cat(
-            (torch.cos(setpoint_yaw), torch.sin(setpoint_yaw), torch.zeros_like(setpoint_yaw)), dim=1
+            (torch.cos(setpoint_yaw), torch.sin(setpoint_yaw), torch.zeros_like(setpoint_yaw)),
+            dim=1,
         )
         y_b_des = normalize(torch.linalg.cross(z_b_des, x_intermediate_des))  # / (
         x_b_des = torch.linalg.cross(y_b_des, z_b_des)
@@ -168,9 +181,13 @@ class GeometricController:
         q_e_y = quat_diff[..., 1].view(self.num_envs, 1)
         q_e_z = quat_diff[..., 2].view(self.num_envs, 1)
         q_e_w = quat_diff[..., 3].view(self.num_envs, 1)
-        norm_factor = (2 / (torch.sqrt(q_e_w.square() + q_e_z.square())) + self._epsilon).view(self.num_envs, 1)
+        norm_factor = (2 / (torch.sqrt(q_e_w.square() + q_e_z.square())) + self._epsilon).view(
+            self.num_envs, 1
+        )
         zeros = torch.zeros((self.num_envs, 1), device=self.device)
-        q_e_red = norm_factor * torch.cat((q_e_w * q_e_x - q_e_y * q_e_z, q_e_w * q_e_y + q_e_x * q_e_z, zeros), dim=-1)
+        q_e_red = norm_factor * torch.cat(
+            (q_e_w * q_e_x - q_e_y * q_e_z, q_e_w * q_e_y + q_e_x * q_e_z, zeros), dim=-1
+        )
         q_e_yaw = norm_factor * torch.cat([zeros, zeros, q_e_z], dim=-1)
         ang_vel_body = quat_apply(quat_inv(state["quat"]), state["ang_vel"])
         alpha_b_des = (

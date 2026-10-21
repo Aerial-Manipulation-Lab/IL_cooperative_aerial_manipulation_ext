@@ -22,8 +22,12 @@ import IL_mav_carry_ext.tasks.managerbased.mdp as mdp
 from IL_mav_carry_ext.assets import FLYCRANE_CFG
 
 VALIDATION = {
-    "RandomTrajectory": mdp.RandomWalk(size=(1.0, 3.0), acceleration=(0.3, 4.5), yaw_rate=(0.0, 0.5)),
-    "FigureEight": mdp.RandomFigureEight(amplitude=(1.0, 2.5), acceleration=(0.5, 4.5), yaw_rate=(-0.3, 0.3)),
+    "RandomTrajectory": mdp.RandomWalk(
+        size=(1.0, 3.0), acceleration=(0.3, 4.5), yaw_rate=(0.0, 0.5)
+    ),
+    "FigureEight": mdp.RandomFigureEight(
+        amplitude=(1.0, 2.5), acceleration=(0.5, 4.5), yaw_rate=(-0.3, 0.3)
+    ),
     "Slow": FigureEight(amplitude=2.5, aspect=0.8, period=8 * math.pi),
     "Medium": FigureEight(amplitude=2.5, aspect=0.8, period=4 * math.pi),
     "MediumPlus": FigureEight(amplitude=1.0, aspect=1.0, period=2 * math.pi),
@@ -78,12 +82,15 @@ class FlycraneSceneCfg(InteractiveSceneCfg):
     # world
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
     distant_light = AssetBaseCfg(
-        prim_path="/World/Light", spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+        prim_path="/World/Light",
+        spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
     )
 
     # flycrane
     robot: ArticulationCfg = FLYCRANE_CFG.replace(prim_path="{ENV_REGEX_NS}/flycrane")
-    joint_forces = JointWrenchSensorCfg(prim_path="{ENV_REGEX_NS}/flycrane")  # cable forces, for recording
+    joint_forces = JointWrenchSensorCfg(
+        prim_path="{ENV_REGEX_NS}/flycrane"
+    )  # cable forces, for recording
 
 
 """
@@ -169,17 +176,27 @@ class ObservationsCfg:
         """
 
         # references
-        drone_ref_horizon = ObsTerm(func=mdp.drone_ref_horizon, params={"command_name": "pose_command"})
-        cable_tension_ref_horizon = ObsTerm(func=mdp.cable_tension_ref_horizon, params={"command_name": "pose_command"})
-        cable_attach_ref_horizon = ObsTerm(func=mdp.cable_attach_ref_horizon, params={"command_name": "pose_command"})
+        drone_ref_horizon = ObsTerm(
+            func=mdp.drone_ref_horizon, params={"command_name": "pose_command"}
+        )
+        cable_tension_ref_horizon = ObsTerm(
+            func=mdp.cable_tension_ref_horizon, params={"command_name": "pose_command"}
+        )
+        cable_attach_ref_horizon = ObsTerm(
+            func=mdp.cable_attach_ref_horizon, params={"command_name": "pose_command"}
+        )
 
         # cable
-        cable_attach_error = ObsTerm(func=mdp.cable_attach_error, params={"command_name": "pose_command"})
+        cable_attach_error = ObsTerm(
+            func=mdp.cable_attach_error, params={"command_name": "pose_command"}
+        )
         cable_attach_rel_drone = ObsTerm(func=mdp.cable_attach_rel_drone)
         cable_attach_rel_drone_rate = ObsTerm(func=mdp.cable_attach_rel_drone_rate)
 
         # drone
-        drone_orientation = ObsTerm(func=mdp.drone_orientation, noise=GaussianNoiseCfg(operation="add", std=0.01))
+        drone_orientation = ObsTerm(
+            func=mdp.drone_orientation, noise=GaussianNoiseCfg(operation="add", std=0.01)
+        )
         drone_linear_velocity = ObsTerm(
             func=mdp.drone_linear_velocity, noise=GaussianNoiseCfg(operation="add", std=0.01)
         )
@@ -200,7 +217,9 @@ class ObservationsCfg:
         Its shape is (num_envs, num_drones, num_nodes * 12).
         """
 
-        teacher_plan_rel_drone = ObsTerm(func=mdp.teacher_plan_rel_drone, params={"command_name": "pose_command"})
+        teacher_plan_rel_drone = ObsTerm(
+            func=mdp.teacher_plan_rel_drone, params={"command_name": "pose_command"}
+        )
 
         def __post_init__(self):
             """Leave the label without noise and join it into one row per drone."""
@@ -264,20 +283,25 @@ class TerminationsCfg:
 
     teacher_solve_failed = DoneTerm(func=mdp.teacher_solve_failed)
 
-    # The ground is the one thing a flycrane can hit (self-collisions are off, envs are filtered), so
-    # touching it is caught from heights. A contact sensor is not used because its PhysX reading can
-    # outlive a reset and end every restart. The drones get 0.2 m, so one tilted onto an arm is caught.
+    # The ground is the one thing a flycrane can hit (self-collisions are off, envs are
+    # filtered), so touching it is caught from heights. A contact sensor is not used because its
+    # PhysX reading can outlive a reset and end every restart. The drones get 0.2 m, so one tilted
+    # onto an arm is caught.
     drone_too_low = DoneTerm(func=mdp.drone_too_low, params={"threshold": 0.2})
     payload_too_low = DoneTerm(func=mdp.payload_too_low, params={"threshold": 0.1})
 
     # The thresholds are cosines, 0 allowing 90 degrees at the drone and -sqrt(2)/2 allowing 135 at
     # the payload.
-    cable_angle_at_drone_too_large = DoneTerm(func=mdp.cable_angle_at_drone_too_large, params={"threshold": 0.0})
+    cable_angle_at_drone_too_large = DoneTerm(
+        func=mdp.cable_angle_at_drone_too_large, params={"threshold": 0.0}
+    )
     cable_angle_at_payload_too_large = DoneTerm(
         func=mdp.cable_angle_at_payload_too_large, params={"threshold": -math.sqrt(2) / 2}
     )
 
-    cables_too_close = DoneTerm(func=mdp.cables_too_close, params={"threshold": 0.2, "num_points": 10})
+    cables_too_close = DoneTerm(
+        func=mdp.cables_too_close, params={"threshold": 0.2, "num_points": 10}
+    )
 
     # The thesis counts an episode that stops with two drones closer than 0.4 m as a failure (6.2).
     drones_too_close = DoneTerm(func=mdp.drones_too_close, params={"threshold": 0.4})
@@ -292,7 +316,7 @@ Environments.
 
 @configclass
 class FlycraneEnvCfg(ManagerBasedRLEnvCfg):
-    """The flycrane with its MPC teacher, to which each task adds its commands and episode length."""
+    """The flycrane with its MPC teacher, to which each task adds its commands and episode."""
 
     scene: FlycraneSceneCfg = FlycraneSceneCfg(num_envs=1, env_spacing=4.0)
     actions: ActionsCfg = ActionsCfg()
@@ -350,7 +374,7 @@ class FigureEightEnvCfg(ShapeEnvCfg):
 
 @configclass
 class RandomTrajectoryEnvCfg(ShapeEnvCfg):
-    """Carry the payload along a random walk, training for every test reference without flying their shapes."""
+    """Carry the payload along a random walk, to train for every test reference unseen."""
 
     def __post_init__(self):
         """Fly the general random walk."""
@@ -360,7 +384,7 @@ class RandomTrajectoryEnvCfg(ShapeEnvCfg):
 
 @configclass
 class RandomTrajectoryMediumToFastEnvCfg(ShapeEnvCfg):
-    """Carry the payload along random walks at Medium, Medium Plus and Fast difficulty, in equal shares."""
+    """Carry the payload along random walks at Medium, Medium Plus and Fast, in equal shares."""
 
     def __post_init__(self):
         """Fly the three walk levels, one per env in turn."""
@@ -400,7 +424,10 @@ class FigureEightMediumPlusEnvCfg(ShapeEnvCfg):
 
 @configclass
 class FigureEightFastEnvCfg(ShapeEnvCfg):
-    """Fly Fast, 5 x 4 m with a lap per 6.3 s, up to 4.7 m/s, 8.2 m/s^2 and 16 m/s^3, leaning 40 degrees."""
+    """Fly Fast, 5 x 4 m with a lap per 6.3 s, up to 4.7 m/s, 8.2 m/s^2 and 16 m/s^3.
+
+    The payload leans up to 40 degrees.
+    """
 
     def __post_init__(self):
         """Fly Fast."""

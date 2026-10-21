@@ -44,7 +44,9 @@ class TeacherLoadPlanRecorder(RecorderTerm):
 
     def record_pre_step(self):
         teacher = teacher_of(self._env)
-        return "teacher_load_plan", torch.as_tensor(teacher.load_plan, dtype=torch.float32, device=teacher.device)
+        return "teacher_load_plan", torch.as_tensor(
+            teacher.load_plan, dtype=torch.float32, device=teacher.device
+        )
 
 
 class TeacherTensionRecorder(RecorderTerm):
@@ -52,7 +54,9 @@ class TeacherTensionRecorder(RecorderTerm):
 
     def record_pre_step(self):
         teacher = teacher_of(self._env)
-        return "teacher_tension", torch.as_tensor(teacher.tension, dtype=torch.float32, device=teacher.device)
+        return "teacher_tension", torch.as_tensor(
+            teacher.tension, dtype=torch.float32, device=teacher.device
+        )
 
 
 class RopeForceRecorder(RecorderTerm):

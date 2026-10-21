@@ -54,8 +54,12 @@ class LowPassFilter:
         )
 
     def reset(self, env_ids):
-        self.input[env_ids] = self.initial_value.unsqueeze(2).repeat(1, 1, 2)[env_ids]  # envs x dim x 2
-        self.output[env_ids] = self.initial_value.unsqueeze(2).repeat(1, 1, 2)[env_ids]  # envs x dim x 2
+        self.input[env_ids] = self.initial_value.unsqueeze(2).repeat(1, 1, 2)[
+            env_ids
+        ]  # envs x dim x 2
+        self.output[env_ids] = self.initial_value.unsqueeze(2).repeat(1, 1, 2)[
+            env_ids
+        ]  # envs x dim x 2
 
     def __call__(self):
         return self.output[:, :, 0]

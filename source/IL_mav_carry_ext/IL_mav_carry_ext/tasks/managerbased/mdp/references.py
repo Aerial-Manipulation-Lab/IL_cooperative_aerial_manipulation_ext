@@ -47,7 +47,8 @@ class RandomFigureEight:
             The figure eight, to be placed at the payload by the command.
         """
         amplitude, acceleration, yaw_rate = (
-            np.random.uniform(*bounds) for bounds in (self.amplitude, self.acceleration, self.yaw_rate)
+            np.random.uniform(*bounds)
+            for bounds in (self.amplitude, self.acceleration, self.yaw_rate)
         )
         # A FigureEight's peak acceleration at full speed is 17/8 amplitude (2 pi / period)^2.
         period = 2 * np.pi * np.sqrt(17 / 8 * amplitude / acceleration)
@@ -121,4 +122,6 @@ class RandomWalk:
             rate = np.clip(rate + 0.3 * yaw_rate * np.random.normal(), -yaw_rate, yaw_rate)
             yaws.append(yaws[-1] + rate * interval)
 
-        return SplinePath(points=np.array(points), yaws=np.array(yaws), interval=interval, start=self.rest)
+        return SplinePath(
+            points=np.array(points), yaws=np.array(yaws), interval=interval, start=self.rest
+        )

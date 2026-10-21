@@ -19,17 +19,27 @@ from datetime import datetime
 
 import numpy as np
 import torch
-from IL_mav_carry_ext.imitation import PLAN_DIM, BehaviourCloning, build_model, load_episodes, save_checkpoint
+from IL_mav_carry_ext.imitation import (
+    PLAN_DIM,
+    BehaviourCloning,
+    build_model,
+    load_episodes,
+    save_checkpoint,
+)
 from IL_mav_carry_ext.reporting import TensorBoardReporter, TextReporter
 
 parser = argparse.ArgumentParser(description="Behaviour cloning on NMPC demonstrations.")
 parser.add_argument("datasets", nargs="+", help="Dataset paths, with or without .hdf5.")
 parser.add_argument("--val_frac", type=float, default=0.1, help="Fraction of episodes held out.")
-parser.add_argument("--seed", type=int, default=0, help="Seed for the split and the initialisation.")
+parser.add_argument(
+    "--seed", type=int, default=0, help="Seed for the split and the initialisation."
+)
 parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--batch_size", type=int, default=4096)
 parser.add_argument("--lr", type=float, default=1e-3)
-parser.add_argument("--model", choices=["mlp"], default="mlp", help="Student network, see build_model.")
+parser.add_argument(
+    "--model", choices=["mlp"], default="mlp", help="Student network, see build_model."
+)
 parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
 parser.add_argument("--log_dir", type=str, default="logs/bc")
 parser.add_argument("--run_name", type=str, default=None, help="Defaults to a timestamp.")
@@ -60,7 +70,9 @@ def main():
 
     episodes, spec = load_episodes(args.datasets)
     report.info(f"loaded {len(episodes)} episodes from {len(args.datasets)} datasets")
-    x_train, y_train, x_val, y_val = (t.to(args.device) for t in split(episodes, args.val_frac, args.seed))
+    x_train, y_train, x_val, y_val = (
+        t.to(args.device) for t in split(episodes, args.val_frac, args.seed)
+    )
     del episodes
     report.info(
         f"{len(x_train)} train / {len(x_val)} val samples, "
@@ -70,7 +82,12 @@ def main():
     model = build_model(spec, args.model).to(args.device)
     bc = BehaviourCloning(model, (x_train, y_train), (x_val, y_val), args.lr, args.batch_size)
 
-    config = {**vars(args), "run_name": run_name, "train_samples": len(x_train), "val_samples": len(x_val)}
+    config = {
+        **vars(args),
+        "run_name": run_name,
+        "train_samples": len(x_train),
+        "val_samples": len(x_val),
+    }
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
     tensorboard = TensorBoardReporter(run_dir)

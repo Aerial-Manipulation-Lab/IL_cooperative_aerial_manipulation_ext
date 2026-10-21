@@ -185,7 +185,9 @@ Teacher.
 """
 
 
-def teacher_solve_failed(env: ManagerBasedRLEnv, command_name: str = "pose_command") -> torch.Tensor:
+def teacher_solve_failed(
+    env: ManagerBasedRLEnv, command_name: str = "pose_command"
+) -> torch.Tensor:
     """End the episode when the teacher's last solve failed, since its plan cannot be trusted.
 
     Returns:

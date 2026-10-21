@@ -37,6 +37,9 @@ class EpisodeLog:
 
     def means(self) -> dict[str, float]:
         keys = dict.fromkeys(key for entry in self.entries for key in entry)
-        means = {key: sum(entry.get(key, 0.0) for entry in self.entries) / len(self.entries) for key in keys}
+        means = {
+            key: sum(entry.get(key, 0.0) for entry in self.entries) / len(self.entries)
+            for key in keys
+        }
         self.entries.clear()
         return means

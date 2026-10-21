@@ -20,19 +20,36 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Fly a student or the teacher for one episode per env.")
+parser = argparse.ArgumentParser(
+    description="Fly a student or the teacher for one episode per env."
+)
 parser.add_argument(
     "--task",
     type=str,
     required=True,
     help="Flycrane-ApproachPose-v0, Flycrane-RandomTrajectory-v0, Flycrane-FigureEight-v0 (random); to test: Flycrane-FigureEightSlow-v0, -FigureEightMedium-v0, -FigureEightMediumPlus-v0, -FigureEightFast-v0, -Circle-v0, -Square-v0.",
 )
-parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint from scripts/train.py or dagger.py.")
-parser.add_argument("--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline.")
-parser.add_argument("--num_envs", type=int, default=1, help="Flights in parallel, each from its own random start.")
-parser.add_argument("--seed", type=int, default=0, help="Seed for the task env; the same seed samples the same goals.")
-parser.add_argument("--video", action="store_true", default=False, help="Record a video of the flight.")
-parser.add_argument("--video_length", type=int, default=600, help="Length of the recorded video (in steps).")
+parser.add_argument(
+    "--checkpoint", type=str, default=None, help="Checkpoint from scripts/train.py or dagger.py."
+)
+parser.add_argument(
+    "--teacher", action="store_true", default=False, help="Fly the NMPC teacher, as the baseline."
+)
+parser.add_argument(
+    "--num_envs", type=int, default=1, help="Flights in parallel, each from its own random start."
+)
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=0,
+    help="Seed for the task env; the same seed samples the same goals.",
+)
+parser.add_argument(
+    "--video", action="store_true", default=False, help="Record a video of the flight."
+)
+parser.add_argument(
+    "--video_length", type=int, default=600, help="Length of the recorded video (in steps)."
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if not args_cli.teacher and args_cli.checkpoint is None:
@@ -75,7 +92,11 @@ def main():
 
     base = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     command = base.command_manager.get_term("pose_command")
-    name = "teacher" if args_cli.teacher else os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
+    name = (
+        "teacher"
+        if args_cli.teacher
+        else os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
+    )
     env = base
     if args_cli.video:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -91,7 +112,9 @@ def main():
     if not args_cli.teacher:
         student, spec, _ = load_checkpoint(args_cli.checkpoint, base.device)
         if spec != FeatureSpec.from_env(base):
-            raise ValueError(f"{args_cli.checkpoint} was trained on other rows than {args_cli.task} gives")
+            raise ValueError(
+                f"{args_cli.checkpoint} was trained on other rows than {args_cli.task} gives"
+            )
 
     n = base.num_envs
     done = torch.zeros(n, dtype=torch.bool, device=base.device)
@@ -111,7 +134,10 @@ def main():
         if ended.any():
             numbers = episode_numbers(extras["log"])
             ended_completed = int((ended & truncated).sum())
-            report.metrics("episodes ended", {"ended": int(ended.sum()), "completed": ended_completed, **numbers})
+            report.metrics(
+                "episodes ended",
+                {"ended": int(ended.sum()), "completed": ended_completed, **numbers},
+            )
             if ended_completed:
                 completed_numbers = numbers
         completed |= ended & truncated
@@ -126,7 +152,9 @@ def main():
                 },
             )
 
-    report.metrics(f"result {name}", {"completed": int(completed.sum()), "envs": n, **completed_numbers})
+    report.metrics(
+        f"result {name}", {"completed": int(completed.sum()), "envs": n, **completed_numbers}
+    )
     env.close()
 
 
