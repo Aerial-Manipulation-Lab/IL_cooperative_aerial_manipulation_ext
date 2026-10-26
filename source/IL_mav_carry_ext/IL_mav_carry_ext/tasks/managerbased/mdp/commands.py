@@ -119,11 +119,11 @@ class MpcCommand(CommandTerm):
             end and the cable tension, of shape (num_samples, num_drones, 10).
         """
         policy = self.teacher.policies[env_id]
-        ref, cables = policy.traj, policy.cable_traj
+        ref, cables = policy.sampler.load_reference, policy.sampler.cable_reference
         lengths = np.array([d.cable_length for d in policy.plant.drones])
         # The cable reference has no angular acceleration, so it is differenced from the rate.
         cable_acc = np.gradient(cables.r, ref.time, axis=0)
-        p, v, a = policy.problem.physics.calculate_drone_states(
+        p, v, a = policy.problem.physics.compute_drone_states(
             ref.p,
             ref.v,
             Rotation.from_quat(ref.q).as_matrix(),
@@ -201,7 +201,7 @@ class MpcCommand(CommandTerm):
             env_ids: Envs to update.
         """
         ids = list(env_ids)
-        now = [self.references[i].window(self._get_time(), [0.0]) for i in ids]
+        now = [self.references[i].get_window(self._get_time(), [0.0]) for i in ids]
         pose = np.stack([np.concatenate([w.p[0], w.q[0]]) for w in now])
         self.pose_command_w[ids] = torch.as_tensor(pose, dtype=torch.float32, device=self.device)
 

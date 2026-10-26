@@ -419,7 +419,7 @@ def _get_payload_references(env: ManagerBasedRLEnv, command_name: str) -> dict[s
         nodes["rotation"] = torch.zeros(env.num_envs, num_nodes, 3, 3, device=env.device)
         return nodes
     now = float(env.common_step_counter) * env.step_dt
-    windows = [ref.window(now, term.teacher.node_offsets_s) for ref in refs]
+    windows = [ref.get_window(now, term.teacher.node_offsets_s) for ref in refs]
 
     def stack(name):
         values = np.stack([getattr(w, name) for w in windows])
@@ -450,7 +450,7 @@ def _get_drone_references(env: ManagerBasedRLEnv, command_name: str) -> dict[str
     else:
         now = float(env.common_step_counter) * env.step_dt
         rows = [
-            drones[ref.indices_at(now + term.teacher.node_offsets_s)]
+            drones[ref.get_indices_at(now + term.teacher.node_offsets_s)]
             for ref, drones in zip(term.references, term.drone_references, strict=True)
         ]
         rows = torch.as_tensor(np.stack(rows), dtype=torch.float32, device=env.device)

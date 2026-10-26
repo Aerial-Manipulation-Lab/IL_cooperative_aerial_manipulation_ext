@@ -89,7 +89,7 @@ class MpcTeacher:
                 [drones.p, drones.v, drones.a, drones.w], axis=-1
             ).transpose(1, 0, 2)
             self.load_plan[i] = np.concatenate([load.p, load.q], axis=-1)
-            self.tension[i] = self.policies[i].warm_start.cable_prediction.t[0]
+            self.tension[i] = self.policies[i].previous_solve.cable_prediction.t[0]
         self._publish()
 
     def measured_load_state(self, i: int, time: float) -> LoadState:

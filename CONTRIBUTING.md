@@ -14,6 +14,7 @@ Google Python Style Guide, PEP-8/484/585, Google-style docstrings. Line length i
 | Constants | `ALL_CAPS` with a docstring underneath | `SOLVER_OPENMP_THREADS` |
 | Configs | `*Cfg` configclasses | `ShapeTrajectoryCommandCfg` |
 | Classes | `CapWords` | `MpcTeacher`, `LowLevelAction` |
+| Fields and attributes | nouns, for what they hold | `num_drones`, `load_plan` |
 | Self-free helpers | private module-level `_functions` at the bottom of the file | `_convert_rotation_matrix_to_rot6d` |
 
 Frames and units go in docstrings, not in names. Metrics are the exception: their unit is the
@@ -33,7 +34,7 @@ name's suffix (`pos_rmse_m`), which `TextReporter` prints.
 - When a docstring lists several things, put each on its own `-` bullet.
 - Name things fully ("a term shared by all drones", not "a term").
 - One summary sentence plus `Args`/`Returns`/`Raises`. That is the contract;
-  nothing else belongs in the docstring.
+  design reasons belong in comments.
 - Observation terms take the short form, one summary sentence plus `Returns`
   with the shape. Their arguments (`env`, `asset_cfg`, `command_name`) are the
   same everywhere and are not listed.
@@ -63,7 +64,8 @@ name's suffix (`pos_rmse_m`), which `TextReporter` prints.
 
 Module: imports, constants, public functions, classes, then private functions.
 Private module-level functions always sit at the bottom of the file, used by
-the class above them or not. Groups of functions may be introduced by a
+the class above them or not. Constants built from the module's own classes
+come right after those classes. Groups of functions may be introduced by a
 capitalized bare string, as sections in a class are:
 
 ```python
