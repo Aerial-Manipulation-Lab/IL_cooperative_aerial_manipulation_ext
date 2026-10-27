@@ -119,7 +119,7 @@ class MpcCommand(CommandTerm):
             end and the cable tension, of shape (num_samples, num_drones, 10).
         """
         policy = self.teacher.policies[env_id]
-        ref, cables = policy.sampler.load_reference, policy.sampler.cable_reference
+        ref, cables = policy.load_reference, policy.cable_reference
         lengths = np.array([d.cable_length for d in policy.plant.drones])
         # The cable reference has no angular acceleration, so it is differenced from the rate.
         cable_acc = np.gradient(cables.r, ref.time, axis=0)

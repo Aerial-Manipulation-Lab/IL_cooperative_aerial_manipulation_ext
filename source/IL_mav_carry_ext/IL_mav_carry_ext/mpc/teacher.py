@@ -33,7 +33,7 @@ class MpcTeacher:
         problem = OcpProblem.for_plant(plant, tuning)
         # only the first backend regenerates the acados artifacts; the rest reuse them
         self.policies = [
-            TeacherPolicy(plant, tuning, AcadosBackend(problem, rebuild=(rebuild and i == 0)))
+            TeacherPolicy(AcadosBackend(problem, rebuild=(rebuild and i == 0)))
             for i in range(env.num_envs)
         ]
         self.plant = plant
