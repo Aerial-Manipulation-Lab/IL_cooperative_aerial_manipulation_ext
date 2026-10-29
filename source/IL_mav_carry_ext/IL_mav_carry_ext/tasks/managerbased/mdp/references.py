@@ -12,7 +12,7 @@ from isaaclab.utils.configclass import (
     configclass,  # Imported explicitly, since isaaclab.utils lazy-exports this name.
 )
 from python_mpc_cusadi import FigureEight, LoadState, SplinePath
-from python_mpc_cusadi.signals.specs import SPLINE_DEGREE
+from python_mpc_cusadi.specs import SPLINE_DEGREE
 
 WALK_INTERVAL = 0.95
 """Time between a random walk's control points, per sqrt(size / acceleration).
@@ -102,7 +102,9 @@ class RandomWalk:
 
         # The walls sit around the walk's start, the origin here, but the floor depends on how
         # high the payload actually starts.
-        lo = np.array([-self.reach, -self.reach, max(-self.vertical, self.floor - start.p[2])])
+        lo = np.array(
+            [-self.reach, -self.reach, max(-self.vertical, self.floor - start.position[2])]
+        )
         hi = np.array([self.reach, self.reach, self.vertical])
         # The course turns less in height than sideways, since the height band is narrow.
         level = np.array([1.0, 1.0, 0.3])

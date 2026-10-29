@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical parameters of the plants, as the MPC models them.
+"""Physical parameters of the rigs, as the MPC models them.
 
 Kept apart from `mpc.teacher` on purpose: the observation terms need the same
 attach points the MPC uses, and importing them from there would drag the
@@ -11,16 +11,16 @@ acados backend into every env that merely observes.
 """
 
 import numpy as np
-from python_mpc_cusadi import DroneCfg, PlantCfg
+from python_mpc_cusadi import Cable, Drone, Load, Rig
 
 # the flycrane as measured on the hardware, same as examples/run_figure_eight.py
-FLYCRANE = PlantCfg(
-    load_mass=1.45,
-    load_inertia=np.array([0.04, 0.05, 0.08]),
-    drones=(
-        DroneCfg(mass=0.6, cable_length=1.0, attach_point=np.array([0.26, 0.22, 0.06])),
-        DroneCfg(mass=0.6, cable_length=1.0, attach_point=np.array([0.26, -0.22, 0.06])),
-        DroneCfg(mass=0.6, cable_length=1.0, attach_point=np.array([-0.28, 0.0, 0.06])),
+FLYCRANE = Rig(
+    load=Load(mass=1.45, inertia=np.array([0.04, 0.05, 0.08])),
+    drones=(Drone(mass=0.6), Drone(mass=0.6), Drone(mass=0.6)),
+    cables=(
+        Cable(length=1.0, attach_point=np.array([0.26, 0.22, 0.06])),
+        Cable(length=1.0, attach_point=np.array([0.26, -0.22, 0.06])),
+        Cable(length=1.0, attach_point=np.array([-0.28, 0.0, 0.06])),
     ),
 )
 
@@ -35,12 +35,12 @@ ROPE_END = np.array([0.0, 0.0, -0.03])
 # below the COM, and the low-level controller lifts the COM back above it.
 # Not modelled: the rope's own mass (28 g per cable), and the payload COM sitting
 # 2 cm below the odometry link the MPC takes as the payload's state.
-FLYCRANE_SIM = PlantCfg(
-    load_mass=1.40,
-    load_inertia=np.array([0.02625, 0.03792, 0.05892]),
-    drones=(
-        DroneCfg(mass=0.6168, cable_length=1.0, attach_point=np.array([0.27, 0.22, 0.06])),
-        DroneCfg(mass=0.6168, cable_length=1.0, attach_point=np.array([0.27, -0.22, 0.06])),
-        DroneCfg(mass=0.6168, cable_length=1.0, attach_point=np.array([-0.27, 0.0, 0.06])),
+FLYCRANE_SIM = Rig(
+    load=Load(mass=1.40, inertia=np.array([0.02625, 0.03792, 0.05892])),
+    drones=(Drone(mass=0.6168), Drone(mass=0.6168), Drone(mass=0.6168)),
+    cables=(
+        Cable(length=1.0, attach_point=np.array([0.27, 0.22, 0.06])),
+        Cable(length=1.0, attach_point=np.array([0.27, -0.22, 0.06])),
+        Cable(length=1.0, attach_point=np.array([-0.27, 0.0, 0.06])),
     ),
 )

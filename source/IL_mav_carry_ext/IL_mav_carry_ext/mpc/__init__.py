@@ -7,11 +7,11 @@
 
 from ..plants import FLYCRANE, FLYCRANE_SIM
 from .recorders import MpcRecorderManagerCfg
-from .teacher import MpcTeacher
+from .teacher import TeacherPolicy
 
 __all__ = [
     "FLYCRANE",
     "FLYCRANE_SIM",
     "MpcRecorderManagerCfg",
-    "MpcTeacher",
+    "TeacherPolicy",
 ]

@@ -6,7 +6,7 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import ManagerTermBase, ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.math import matrix_from_quat, quat_apply
-from python_mpc_cusadi import PlantCfg
+from python_mpc_cusadi import Rig
 
 from ....assets import DRONE_IDX, PAYLOAD_IDX
 from ....plants import FLYCRANE_SIM
@@ -190,8 +190,8 @@ def cable_attach_point(env: ManagerBasedRLEnv, command_name: str = "pose_command
     Returns:
         Attach points of shape (num_envs, num_drones, 3).
     """
-    plant = env.command_manager.get_term(command_name).teacher.plant
-    return _get_attach_points(env, plant).expand(env.num_envs, -1, -1)
+    rig = env.command_manager.get_term(command_name).teacher.rig
+    return _get_attach_points(env, rig).expand(env.num_envs, -1, -1)
 
 
 def cable_direction(
@@ -295,7 +295,7 @@ def cable_attach_ref_horizon(
     # The reference gets a drone axis, (num_envs, num_nodes, num_drones, 3), to broadcast over.
     p, v, a, rotation = (nodes[name][:, :, None] for name in ("p", "v", "a", "rotation"))
     # This is a reference, so it uses the teacher's model of the attach points.
-    rho = _get_attach_points(env, teacher.plant).expand(env.num_envs, teacher.num_nodes, -1, -1)
+    rho = _get_attach_points(env, teacher.rig).expand(env.num_envs, teacher.num_nodes, -1, -1)
     w, alpha = nodes["w"][:, :, None].expand_as(rho), nodes["alpha"][:, :, None].expand_as(rho)
     w_rho = torch.cross(w, rho, dim=-1)
     turn = lambda x: (rotation @ x[..., None]).squeeze(-1)  # noqa: E731
@@ -397,6 +397,16 @@ Helpers.
 """
 
 
+_LOAD_MEMBERS = {
+    "p": "position",
+    "v": "velocity",
+    "a": "acceleration",
+    "w": "angular_velocity",
+    "alpha": "angular_acceleration",
+}
+"""The payload reference's members, by the short names the terms read them under."""
+
+
 def _get_payload_references(env: ManagerBasedRLEnv, command_name: str) -> dict[str, torch.Tensor]:
     """Get the payload's reference at each of the MPC's nodes, in the env frame.
 
@@ -421,12 +431,12 @@ def _get_payload_references(env: ManagerBasedRLEnv, command_name: str) -> dict[s
     now = float(env.common_step_counter) * env.step_dt
     windows = [ref.get_window(now, term.teacher.node_offsets_s) for ref in refs]
 
-    def stack(name):
-        values = np.stack([getattr(w, name) for w in windows])
+    def stack(member):
+        values = np.stack([getattr(w, member) for w in windows])
         return torch.as_tensor(values, dtype=torch.float32, device=env.device)
 
-    nodes = {name: stack(name) for name in ("p", "v", "a", "w", "alpha")}
-    nodes["rotation"] = matrix_from_quat(stack("q"))
+    nodes = {short: stack(member) for short, member in _LOAD_MEMBERS.items()}
+    nodes["rotation"] = matrix_from_quat(stack("orientation"))
     return nodes
 
 
@@ -470,15 +480,15 @@ def _convert_rotation_matrix_to_rot6d(rotation: torch.Tensor) -> torch.Tensor:
     return rotation[..., :2].transpose(-1, -2).flatten(-2)
 
 
-def _get_attach_points(env: ManagerBasedRLEnv, plant: PlantCfg) -> torch.Tensor:
-    """Get where a plant's cables are fixed on the payload, in m in the payload frame.
+def _get_attach_points(env: ManagerBasedRLEnv, rig: Rig) -> torch.Tensor:
+    """Get where a rig's cables are fixed on the payload, in m in the payload frame.
 
     Args:
         env: Environment whose device the points go to.
-        plant: Plant whose attach points are read, the sim's or the teacher's model.
+        rig: Rig whose attach points are read, the sim's or the teacher's model.
 
     Returns:
         Attach points of shape (num_drones, 3).
     """
-    points = np.stack([d.attach_point for d in plant.drones])
+    points = np.stack([c.attach_point for c in rig.cables])
     return torch.tensor(points, dtype=torch.float32, device=env.device)
