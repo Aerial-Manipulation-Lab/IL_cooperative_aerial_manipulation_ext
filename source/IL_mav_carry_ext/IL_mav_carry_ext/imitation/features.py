@@ -10,11 +10,20 @@ from dataclasses import dataclass
 
 import torch
 
-PLAN_DIM = 12
-"""Per plan node: p(3), v(3), a(3), w(3)."""
+PLAN_PARTS = {
+    "position": slice(0, 3),
+    "velocity": slice(3, 6),
+    "acceleration": slice(6, 9),
+    "angular_velocity": slice(9, 12),
+}
+"""Where a drone's position, velocity, acceleration and body rate sit in one node of its plan.
 
-PLAN_PARTS = {"p": slice(0, 3), "v": slice(3, 6), "a": slice(6, 9), "w": slice(9, 12)}
-"""Where a node's position, velocity, acceleration and body rate sit in it."""
+This is the one place the label's node layout exists: the label term packs a node in this order,
+and the action term reads it back by these slices. The names are `DroneTrajectory`'s.
+"""
+
+PLAN_DIM = 12
+"""Width of one node of the plan, every part together."""
 
 
 @dataclass(frozen=True)
@@ -45,7 +54,7 @@ class FeatureSpec:
         return cls(
             policy_terms=tuple((name, int(dims[-1])) for name, dims in terms),
             num_drones=teacher.num_drones,
-            node_offsets_s=tuple(float(t) for t in teacher.node_offsets_s),
+            node_offsets_s=tuple(float(t) for t in teacher.node_offsets),
             step_dt=float(env.step_dt),
         )
 
@@ -92,6 +101,6 @@ class FeatureSpec:
         )
 
     def plan(self, label: torch.Tensor) -> torch.Tensor:
-        """Label rows (..., label_dim) as plans (..., num_nodes, PLAN_DIM): `spec.plan(y)[..., 1, PLAN_PARTS["v"]]`
-        is node 1's velocity."""
+        """Label rows (..., label_dim) as plans (..., num_nodes, PLAN_DIM):
+        `spec.plan(y)[..., 1, PLAN_PARTS["velocity"]]` is node 1's velocity."""
         return label.unflatten(-1, (self.num_nodes, PLAN_DIM))

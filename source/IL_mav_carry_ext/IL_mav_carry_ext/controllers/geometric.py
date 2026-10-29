@@ -16,10 +16,9 @@ class GeometricController:
 
     """
 
-    def __init__(self, num_envs: int, control_mode: str):
+    def __init__(self, num_envs: int):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_envs = num_envs
-        self.control_mode = control_mode
 
         self.p_err_max_ = torch.full(
             (self.num_envs, 3), torch.finfo(torch.float32).max, device=self.device
@@ -120,16 +119,12 @@ class GeometricController:
             self.filtered_thrusts = actions_filtered
 
         # acceleration command
-        if self.control_mode == "geometric":
-            p_ref_cg = setpoint["pos"] - quat_apply(state["quat"], self.p_offset)
-            pos_error = torch.clamp(p_ref_cg - state["pos"], -self.p_err_max_, self.p_err_max_)
-            vel_error = torch.clamp(
-                setpoint["lin_vel"] - state["lin_vel"], -self.v_err_max_, self.v_err_max_
-            )
-            des_acc = self.kp_acc * pos_error + self.kd_acc * vel_error + setpoint["lin_acc"]
-
-        elif self.control_mode == "ACCBR":
-            des_acc = setpoint["lin_acc"]
+        p_ref_cg = setpoint["pos"] - quat_apply(state["quat"], self.p_offset)
+        pos_error = torch.clamp(p_ref_cg - state["pos"], -self.p_err_max_, self.p_err_max_)
+        vel_error = torch.clamp(
+            setpoint["lin_vel"] - state["lin_vel"], -self.v_err_max_, self.v_err_max_
+        )
+        des_acc = self.kp_acc * pos_error + self.kd_acc * vel_error + setpoint["lin_acc"]
 
         # estimation of load acceleration in world frame
         acc_load = (
@@ -167,12 +162,9 @@ class GeometricController:
         # calculate the desired quaternion
         des_rot_matrix = torch.stack([x_b_des, y_b_des, z_b_des], dim=2)
         q_cmd = quat_from_matrix(des_rot_matrix)
-        # angular velocity command
-        if self.control_mode == "geometric":
-            # the planned body rate, world frame, as Agilicious' use_bodyrate_ref
-            omega_b_ref = quat_apply(quat_inv(state["quat"]), setpoint["body_rates"])
-        elif self.control_mode == "ACCBR":
-            omega_b_ref = setpoint["body_rates"]
+        # angular velocity command: the planned body rate, world frame, as Agilicious'
+        # use_bodyrate_ref
+        omega_b_ref = quat_apply(quat_inv(state["quat"]), setpoint["body_rates"])
 
         # tilt prioritized attitude control
         quat_diff = quat_mul(quat_inv(state["quat"]), q_cmd)

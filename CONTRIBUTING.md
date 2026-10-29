@@ -14,7 +14,7 @@ Google Python Style Guide, PEP-8/484/585, Google-style docstrings. Line length i
 | Constants | `ALL_CAPS` with a docstring underneath | `SOLVER_OPENMP_THREADS` |
 | Configs | `*Cfg` configclasses | `ShapeTrajectoryCommandCfg` |
 | Classes | `CapWords` | `MpcTeacher`, `LowLevelAction` |
-| Fields and attributes | nouns, for what they hold | `num_drones`, `load_plan` |
+| Fields and attributes | nouns, for what they hold | `num_drones`, `node_offsets` |
 | Self-free helpers | private module-level `_functions` at the bottom of the file | `_convert_rotation_matrix_to_rot6d` |
 
 Frames and units go in docstrings, not in names. Metrics are the exception: their unit is the

@@ -4,6 +4,7 @@ import math
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
+import torch
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -103,8 +104,6 @@ class ApproachPoseCommandsCfg:
     """A smooth move of the payload to a random goal pose."""
 
     pose_command = mdp.ApproachPoseCommandCfg(
-        asset_name="robot",
-        body_name="load_odometry_sensor_link",
         debug_vis=True,
         ramp_duration=3.0,  # never more than a gentle move away
         ranges=mdp.ApproachPoseCommandCfg.Ranges(
@@ -122,12 +121,7 @@ class ApproachPoseCommandsCfg:
 class ShapeCommandsCfg:
     """A shape for the payload to fly, from wherever it starts, which each shape task chooses."""
 
-    pose_command = mdp.ShapeTrajectoryCommandCfg(
-        asset_name="robot",
-        body_name="load_odometry_sensor_link",
-        debug_vis=True,
-        shapes=MISSING,
-    )
+    pose_command = mdp.ShapeTrajectoryCommandCfg(debug_vis=True, shapes=MISSING)
 
 
 """
@@ -144,10 +138,7 @@ class ActionsCfg:
     """
 
     low_level_action: mdp.LowLevelActionCfg = mdp.LowLevelActionCfg(
-        asset_name="robot",
-        body_name="Falcon.*rotor_.*",
-        debug_vis=False,
-        control_mode="geometric",  # the next node's position, velocity, acceleration and body rate
+        asset_name="robot", body_name="Falcon.*rotor_.*", debug_vis=False
     )
 
 
@@ -188,10 +179,17 @@ class ObservationsCfg:
 
         # cable
         cable_attach_error = ObsTerm(
-            func=mdp.cable_attach_error, params={"command_name": "pose_command"}
+            func=mdp.cable_attach_error,
+            params={"command_name": "pose_command"},
+            # 3 mm on the position error and 1 cm/s on the velocity error, as on the measurements
+            noise=GaussianNoiseCfg(operation="add", std=torch.tensor([0.003] * 3 + [0.01] * 3)),
         )
-        cable_attach_rel_drone = ObsTerm(func=mdp.cable_attach_rel_drone)
-        cable_attach_rel_drone_rate = ObsTerm(func=mdp.cable_attach_rel_drone_rate)
+        cable_attach_rel_drone = ObsTerm(
+            func=mdp.cable_attach_rel_drone, noise=GaussianNoiseCfg(operation="add", std=0.003)
+        )
+        cable_attach_rel_drone_rate = ObsTerm(
+            func=mdp.cable_attach_rel_drone_rate, noise=GaussianNoiseCfg(operation="add", std=0.01)
+        )
 
         # drone
         drone_orientation = ObsTerm(

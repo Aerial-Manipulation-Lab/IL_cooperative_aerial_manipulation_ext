@@ -1,5 +1,3 @@
-from collections.abc import Callable
-
 import numpy as np
 import torch
 from isaaclab.assets import Articulation
@@ -9,94 +7,8 @@ from isaaclab.utils.math import matrix_from_quat, quat_apply
 from python_mpc_cusadi import Rig
 
 from ....assets import DRONE_IDX, PAYLOAD_IDX
+from ....imitation.features import PLAN_PARTS
 from ....plants import FLYCRANE_SIM
-
-"""
-Payload.
-"""
-
-
-def copy_shared_term_to_each_drone(
-    env: ManagerBasedRLEnv, term: Callable[..., torch.Tensor], params: dict | None = None
-) -> torch.Tensor:
-    """Give each drone its own copy of a term that is the same for all drones.
-
-    The student takes one row of inputs per drone. Terms about the payload or its reference are
-    the same for every drone, so they are computed once and copied into each drone's row.
-
-    Args:
-        term: Observation term with one row per env, of shape (num_envs, k).
-        params: Keyword arguments passed on to `term`.
-
-    Returns:
-        The term's row repeated for each drone, of shape (num_envs, num_drones, k).
-    """
-    return term(env, **(params or {}))[:, None].expand(-1, FLYCRANE_SIM.num_drones, -1)
-
-
-def payload_orientation(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """How the payload is rotated, as the rotation matrix from its body frame to the world.
-
-    Returns:
-        Rotation matrix flattened row by row, of shape (num_envs, 9).
-    """
-    robot: Articulation = env.scene[asset_cfg.name]
-    payload_quat = robot.data.body_com_state_w.torch[:, PAYLOAD_IDX, 3:7].squeeze(1)
-    payload_rot_matrix = matrix_from_quat(payload_quat)
-    return payload_rot_matrix.view(env.num_envs, -1)
-
-
-def payload_linear_velocity(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """How fast the payload is moving, in m/s, along the world axes.
-
-    Returns:
-        Linear velocity of shape (num_envs, 3).
-    """
-    robot: Articulation = env.scene[asset_cfg.name]
-    return robot.data.body_com_state_w.torch[:, PAYLOAD_IDX, 7:10].view(env.num_envs, -1)
-
-
-def payload_angular_velocity(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """How fast the payload is turning, in rad/s, about the world axes.
-
-    Returns:
-        Angular velocity of shape (num_envs, 3).
-    """
-    robot: Articulation = env.scene[asset_cfg.name]
-    return robot.data.body_com_state_w.torch[:, PAYLOAD_IDX, 10:].view(env.num_envs, -1)
-
-
-def payload_ref_horizon(
-    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Where the payload should be at each of the MPC's nodes, seen from where it is now.
-
-    Each node holds, in this order:
-
-    - the position still to go in m, along the world axes;
-    - the reference velocity in m/s;
-    - the reference acceleration in m/s^2;
-    - the rotation still to go as rot6d, in the payload frame;
-    - the reference body rate in rad/s.
-
-    Returns:
-        Reference of shape (num_envs, num_nodes * 18).
-    """
-    nodes = _get_payload_references(env, command_name)
-    payload = env.scene[asset_cfg.name].data.body_com_state_w.torch[:, PAYLOAD_IDX[0]]
-    position = nodes["p"] - (payload[:, :3] - env.scene.env_origins)[:, None]
-    # The attitude is taken relative to the payload, so the student sees what is still to turn.
-    payload_rotation = matrix_from_quat(payload[:, None, 3:7])
-    attitude_to_go = payload_rotation.transpose(-1, -2) @ nodes["rotation"]
-    attitude = _convert_rotation_matrix_to_rot6d(attitude_to_go)
-    return torch.cat([position, nodes["v"], nodes["a"], attitude, nodes["w"]], dim=-1).flatten(1)
-
 
 """
 Drones, one row per drone.
@@ -113,8 +25,7 @@ def drone_orientation(
     """
     robot: Articulation = env.scene[asset_cfg.name]
     drone_quat = robot.data.body_com_state_w.torch[:, DRONE_IDX, 3:7]
-    drone_rot_matrix = matrix_from_quat(drone_quat)
-    return drone_rot_matrix.flatten(-2)
+    return matrix_from_quat(drone_quat).flatten(-2)
 
 
 def drone_linear_velocity(
@@ -141,20 +52,6 @@ def drone_angular_velocity(
     return robot.data.body_com_state_w.torch[:, DRONE_IDX, 10:]
 
 
-def drone_position_rel_payload(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Where each drone is, seen from the payload, in m along the world axes.
-
-    Returns:
-        Positions of shape (num_envs, num_drones, 3).
-    """
-    robot: Articulation = env.scene[asset_cfg.name]
-    drone_pos_world_frame = robot.data.body_com_state_w.torch[:, DRONE_IDX, :3]
-    payload_pos_world_frame = robot.data.body_com_state_w.torch[:, PAYLOAD_IDX, :3]
-    return drone_pos_world_frame - payload_pos_world_frame
-
-
 def drone_ref_horizon(
     env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -169,11 +66,14 @@ def drone_ref_horizon(
     Returns:
         Reference of shape (num_envs, num_drones, num_nodes * 9).
     """
-    nodes = _get_drone_references(env, command_name)
+    windows = env.command_manager.get_term(command_name).teacher.windows
+    position = _to_tensor(env, [[d.position for d in w.drones] for w in windows])
+    velocity = _to_tensor(env, [[d.velocity for d in w.drones] for w in windows])
+    acceleration = _to_tensor(env, [[d.acceleration for d in w.drones] for w in windows])
     drones = env.scene[asset_cfg.name].data.body_com_state_w.torch[:, DRONE_IDX]
-    position = nodes["p"] - (drones[..., :3] - env.scene.env_origins[:, None])[:, :, None]
-    velocity = nodes["v"] - drones[:, :, None, 7:10]
-    return torch.cat([position, velocity, nodes["a"]], dim=-1).flatten(2)
+    position -= (drones[..., :3] - env.scene.env_origins[:, None])[:, :, None]
+    velocity -= drones[:, :, None, 7:10]
+    return torch.cat([position, velocity, acceleration], dim=-1).flatten(2)
 
 
 """
@@ -192,19 +92,6 @@ def cable_attach_point(env: ManagerBasedRLEnv, command_name: str = "pose_command
     """
     rig = env.command_manager.get_term(command_name).teacher.rig
     return _get_attach_points(env, rig).expand(env.num_envs, -1, -1)
-
-
-def cable_direction(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """Which way each cable runs, from its attach point up to its drone, along the world axes.
-
-    The direction is a unit vector.
-
-    Returns:
-        Directions of shape (num_envs, num_drones, 3).
-    """
-    return torch.nn.functional.normalize(-cable_attach_rel_drone(env, asset_cfg), dim=-1)
 
 
 def cable_attach_rel_drone(
@@ -291,12 +178,18 @@ def cable_attach_ref_horizon(
         Reference of shape (num_envs, num_drones, num_nodes * 9).
     """
     teacher = env.command_manager.get_term(command_name).teacher
-    nodes = _get_payload_references(env, command_name)
-    # The reference gets a drone axis, (num_envs, num_nodes, num_drones, 3), to broadcast over.
-    p, v, a, rotation = (nodes[name][:, :, None] for name in ("p", "v", "a", "rotation"))
+    windows = teacher.windows
+    # The payload's reference gets a drone axis, (num_envs, num_nodes, 1, 3), to broadcast over.
+    loads = [window.load for window in windows]
+    p = _to_tensor(env, [load.position for load in loads])[:, :, None]
+    v = _to_tensor(env, [load.velocity for load in loads])[:, :, None]
+    a = _to_tensor(env, [load.acceleration for load in loads])[:, :, None]
+    w = _to_tensor(env, [load.angular_velocity for load in loads])[:, :, None]
+    alpha = _to_tensor(env, [load.angular_acceleration for load in loads])[:, :, None]
+    rotation = matrix_from_quat(_to_tensor(env, [load.orientation for load in loads]))[:, :, None]
     # This is a reference, so it uses the teacher's model of the attach points.
     rho = _get_attach_points(env, teacher.rig).expand(env.num_envs, teacher.num_nodes, -1, -1)
-    w, alpha = nodes["w"][:, :, None].expand_as(rho), nodes["alpha"][:, :, None].expand_as(rho)
+    w, alpha = w.expand_as(rho), alpha.expand_as(rho)
     w_rho = torch.cross(w, rho, dim=-1)
     turn = lambda x: (rotation @ x[..., None]).squeeze(-1)  # noqa: E731
     drones = env.scene[asset_cfg.name].data.body_com_state_w.torch[:, DRONE_IDX, :3]
@@ -363,7 +256,8 @@ def cable_tension_ref_horizon(env: ManagerBasedRLEnv, command_name: str) -> torc
     Returns:
         Tensions of shape (num_envs, num_drones, num_nodes).
     """
-    return _get_drone_references(env, command_name)["tension"]
+    windows = env.command_manager.get_term(command_name).teacher.windows
+    return _to_tensor(env, [[c.tension for c in w.cables] for w in windows])
 
 
 """
@@ -374,7 +268,7 @@ Teacher, the student's label.
 def teacher_plan_rel_drone(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     """What the teacher plans for each drone at each of the MPC's nodes, seen from the drone now.
 
-    This is the student's label. Each node holds, in this order, along the world axes:
+    This is the student's label. Each node holds, in `PLAN_PARTS` order and along the world axes:
 
     - the position still to go in m;
     - the velocity still to gain in m/s;
@@ -382,14 +276,23 @@ def teacher_plan_rel_drone(env: ManagerBasedRLEnv, command_name: str) -> torch.T
     - the planned body rate in rad/s.
 
     Returns:
-        Plan of shape (num_envs, num_drones, num_nodes * 12).
+        Plan of shape (num_envs, num_drones, num_nodes * PLAN_DIM).
     """
-    teacher = env.command_manager.get_term(command_name).teacher
-    drones = teacher.robot.data.body_com_state_w.torch[:, teacher.falcon_idx]
-    label = teacher.plan.clone()
-    label[..., 0:3] -= (drones[..., :3] - env.scene.env_origins[:, None])[:, :, None]
-    label[..., 3:6] -= drones[:, :, None, 7:10]
-    return label.flatten(-2)
+    plans = env.command_manager.get_term(command_name).teacher.plans
+    position = _to_tensor(env, [[d.position for d in p.drones] for p in plans])
+    velocity = _to_tensor(env, [[d.velocity for d in p.drones] for p in plans])
+    acceleration = _to_tensor(env, [[d.acceleration for d in p.drones] for p in plans])
+    angular_velocity = _to_tensor(env, [[d.angular_velocity for d in p.drones] for p in plans])
+    drones = env.scene["robot"].data.body_com_state_w.torch[:, DRONE_IDX]
+    position -= (drones[..., :3] - env.scene.env_origins[:, None])[:, :, None]
+    velocity -= drones[:, :, None, 7:10]
+    parts = {
+        "position": position,
+        "velocity": velocity,
+        "acceleration": acceleration,
+        "angular_velocity": angular_velocity,
+    }
+    return torch.cat([parts[name] for name in PLAN_PARTS], dim=-1).flatten(-2)
 
 
 """
@@ -397,87 +300,17 @@ Helpers.
 """
 
 
-_LOAD_MEMBERS = {
-    "p": "position",
-    "v": "velocity",
-    "a": "acceleration",
-    "w": "angular_velocity",
-    "alpha": "angular_acceleration",
-}
-"""The payload reference's members, by the short names the terms read them under."""
-
-
-def _get_payload_references(env: ManagerBasedRLEnv, command_name: str) -> dict[str, torch.Tensor]:
-    """Get the payload's reference at each of the MPC's nodes, in the env frame.
+def _to_tensor(env: ManagerBasedRLEnv, rows: list) -> torch.Tensor:
+    """Stack per-env rows of the teacher's trajectories into one tensor on the env's device.
 
     Args:
-        env: Environment holding the command.
-        command_name: Name of the MPC command holding the references.
+        env: Environment whose device the tensor goes to.
+        rows: One entry per env, an array or a list of arrays per drone, all of one shape.
 
     Returns:
-        Fields `p`, `v`, `a`, `w` and `alpha` of shape (num_envs, num_nodes, 3) and `rotation` of
-        shape (num_envs, num_nodes, 3, 3). Zeros before the first reset.
+        The rows stacked, of shape (num_envs, ...).
     """
-    term = env.command_manager.get_term(command_name)
-    refs = [term.get_reference(i) for i in range(env.num_envs)]
-    # The observation manager probes the shapes before the first reset, when there are no
-    # references yet.
-    if any(ref is None for ref in refs):
-        zeros = torch.zeros(env.num_envs, term.teacher.num_nodes, 3, device=env.device)
-        nodes = dict.fromkeys(("p", "v", "a", "w", "alpha"), zeros)
-        num_nodes = term.teacher.num_nodes
-        nodes["rotation"] = torch.zeros(env.num_envs, num_nodes, 3, 3, device=env.device)
-        return nodes
-    now = float(env.common_step_counter) * env.step_dt
-    windows = [ref.get_window(now, term.teacher.node_offsets_s) for ref in refs]
-
-    def stack(member):
-        values = np.stack([getattr(w, member) for w in windows])
-        return torch.as_tensor(values, dtype=torch.float32, device=env.device)
-
-    nodes = {short: stack(member) for short, member in _LOAD_MEMBERS.items()}
-    nodes["rotation"] = matrix_from_quat(stack("orientation"))
-    return nodes
-
-
-def _get_drone_references(env: ManagerBasedRLEnv, command_name: str) -> dict[str, torch.Tensor]:
-    """Get where each drone should be at each of the MPC's nodes, in the env frame.
-
-    Args:
-        env: Environment holding the command.
-        command_name: Name of the MPC command holding the drone references.
-
-    Returns:
-        Fields `p`, `v` and `a` of shape (num_envs, num_drones, num_nodes, 3) and `tension` of
-        shape (num_envs, num_drones, num_nodes). Zeros before the first reset.
-    """
-    term = env.command_manager.get_term(command_name)
-    # The observation manager probes the shapes before the first reset, when there are no
-    # references yet.
-    if any(ref is None for ref in term.drone_references):
-        num_nodes = term.teacher.num_nodes
-        rows = torch.zeros(env.num_envs, len(DRONE_IDX), num_nodes, 10, device=env.device)
-    else:
-        now = float(env.common_step_counter) * env.step_dt
-        rows = [
-            drones[ref.get_indices_at(now + term.teacher.node_offsets_s)]
-            for ref, drones in zip(term.references, term.drone_references, strict=True)
-        ]
-        rows = torch.as_tensor(np.stack(rows), dtype=torch.float32, device=env.device)
-        rows = rows.transpose(1, 2)
-    return {"p": rows[..., 0:3], "v": rows[..., 3:6], "a": rows[..., 6:9], "tension": rows[..., 9]}
-
-
-def _convert_rotation_matrix_to_rot6d(rotation: torch.Tensor) -> torch.Tensor:
-    """Convert rotation matrices to their 6D form, the first two columns one after the other.
-
-    Args:
-        rotation: Rotation matrices of shape (..., 3, 3).
-
-    Returns:
-        6D rotations of shape (..., 6).
-    """
-    return rotation[..., :2].transpose(-1, -2).flatten(-2)
+    return torch.as_tensor(np.array(rows), dtype=torch.float32, device=env.device)
 
 
 def _get_attach_points(env: ManagerBasedRLEnv, rig: Rig) -> torch.Tensor:

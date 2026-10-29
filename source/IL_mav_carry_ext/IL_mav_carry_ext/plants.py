@@ -13,26 +13,16 @@ acados backend into every env that merely observes.
 import numpy as np
 from python_mpc_cusadi import Cable, Drone, Load, Rig
 
-# the flycrane as measured on the hardware, same as examples/run_figure_eight.py
-FLYCRANE = Rig(
-    load=Load(mass=1.45, inertia=np.array([0.04, 0.05, 0.08])),
-    drones=(Drone(mass=0.6), Drone(mass=0.6), Drone(mass=0.6)),
-    cables=(
-        Cable(length=1.0, attach_point=np.array([0.26, 0.22, 0.06])),
-        Cable(length=1.0, attach_point=np.array([0.26, -0.22, 0.06])),
-        Cable(length=1.0, attach_point=np.array([-0.28, 0.0, 0.06])),
-    ),
-)
-
 ROPE_END = np.array([0.0, 0.0, -0.03])
 """Where the rope meets each drone, in the drone's body frame: Agilicious' attach_point_drone and p_offset."""
 
 # the flycrane as the sim's USD model builds it, read back from the articulation.
-# Differs from the hardware: the attach points are symmetric in x (the hardware
-# values sit 1 cm off, most likely measured from an off-centre payload COM), the
-# payload is lighter and its inertia ~35% smaller. As in the thesis, a cable is the
-# 1 m of rope only: the MPC plans and measures each drone at its rope end, ROPE_END
-# below the COM, and the low-level controller lifts the COM back above it.
+# Differs from the hardware rig in python_mpc_cusadi's example: the attach points are
+# symmetric in x (the hardware values sit 1 cm off, most likely measured from an
+# off-centre payload COM), the payload is lighter and its inertia ~35% smaller. As in
+# the thesis, a cable is the 1 m of rope only: the MPC plans and measures each drone at
+# its rope end, ROPE_END below the COM, and the low-level controller lifts the COM back
+# above it.
 # Not modelled: the rope's own mass (28 g per cable), and the payload COM sitting
 # 2 cm below the odometry link the MPC takes as the payload's state.
 FLYCRANE_SIM = Rig(

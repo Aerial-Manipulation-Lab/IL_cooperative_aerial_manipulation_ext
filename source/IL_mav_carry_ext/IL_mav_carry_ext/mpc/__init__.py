@@ -5,13 +5,10 @@
 
 """NMPC teacher plumbing for the flycrane tasks."""
 
-from ..plants import FLYCRANE, FLYCRANE_SIM
 from .recorders import MpcRecorderManagerCfg
 from .teacher import TeacherPolicy
 
 __all__ = [
-    "FLYCRANE",
-    "FLYCRANE_SIM",
     "MpcRecorderManagerCfg",
     "TeacherPolicy",
 ]

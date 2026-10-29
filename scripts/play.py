@@ -5,7 +5,7 @@
 
 """Fly a trained student, or the NMPC teacher with --teacher, for one episode per env.
 
-Reports the thesis's metrics, which the env computes (`MpcCommand`'s metrics, Isaac Lab's termination
+Reports the thesis's metrics, which the env computes (`ReferenceCommand`'s metrics, Isaac Lab's termination
 shares): the payload's position and attitude RMSE against its reference, and how each episode ended,
 with two drones closer than 0.4 m ending it as a failure, as in the thesis.
 

@@ -52,6 +52,25 @@ parser.add_argument(
     default=0.0,
     help="The model's attach points moved along x, m.",
 )
+# disturbances: gusts on the payload and noisy measurements
+parser.add_argument(
+    "--payload_force",
+    type=float,
+    default=0.0,
+    help="Gusts on the payload, up to this force per axis in N, redrawn every 1 to 3 s.",
+)
+parser.add_argument(
+    "--payload_torque",
+    type=float,
+    default=0.0,
+    help="Gusts on the payload, up to this torque per axis in N m, redrawn with the force.",
+)
+parser.add_argument(
+    "--noise_scale",
+    type=float,
+    default=0.0,
+    help="Noise on what the student and the pilot measure, times the configured spreads.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if not args_cli.teacher and args_cli.checkpoint is None:
@@ -116,16 +135,34 @@ def main():
             mode="startup",
             params={"asset_cfg": payload, "com_range": {"x": offset}},
         )
-    if args_cli.model_cable_length is not None or args_cli.model_attach_offset:
-        drones = tuple(
-            replace(
-                d,
-                cable_length=args_cli.model_cable_length or d.cable_length,
-                attach_point=d.attach_point + np.array([args_cli.model_attach_offset, 0.0, 0.0]),
-            )
-            for d in FLYCRANE_SIM.drones
+    if args_cli.payload_force or args_cli.payload_torque:
+        env_cfg.events.payload_gusts = EventTerm(
+            func=mdp.apply_external_force_torque,
+            mode="interval",
+            interval_range_s=(1.0, 3.0),
+            params={
+                "asset_cfg": payload,
+                "force_range": (-args_cli.payload_force, args_cli.payload_force),
+                "torque_range": (-args_cli.payload_torque, args_cli.payload_torque),
+            },
         )
-        env_cfg.commands.pose_command.model = replace(FLYCRANE_SIM, drones=drones)
+    if args_cli.noise_scale:
+        # the student's measured inputs carry their configured noise, scaled; references carry none
+        env_cfg.observations.policy.enable_corruption = True
+        for term in vars(env_cfg.observations.policy).values():
+            if getattr(term, "noise", None) is not None:
+                term.noise.std = term.noise.std * args_cli.noise_scale
+        env_cfg.actions.low_level_action.state_noise_scale = args_cli.noise_scale
+    if args_cli.model_cable_length is not None or args_cli.model_attach_offset:
+        cables = tuple(
+            replace(
+                c,
+                length=args_cli.model_cable_length or c.length,
+                attach_point=c.attach_point + np.array([args_cli.model_attach_offset, 0.0, 0.0]),
+            )
+            for c in FLYCRANE_SIM.cables
+        )
+        env_cfg.commands.pose_command.model = replace(FLYCRANE_SIM, cables=cables)
     env = ManagerBasedRLEnv(cfg=env_cfg)
     if spec is not None and spec != FeatureSpec.from_env(env):
         raise ValueError(f"{args_cli.checkpoint} was trained on other rows than {TASK} gives")

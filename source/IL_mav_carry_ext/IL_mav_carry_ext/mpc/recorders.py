@@ -12,6 +12,7 @@ is still the one the action was computed from, and the teacher's plan was
 solved for that same state, so each row is one matching (obs, label) pair.
 """
 
+import numpy as np
 import torch
 from isaaclab.envs.mdp.recorders.recorders_cfg import (
     InitialStateRecorderCfg,
@@ -44,8 +45,9 @@ class TeacherLoadPlanRecorder(RecorderTerm):
 
     def record_pre_step(self):
         teacher = teacher_of(self._env)
+        poses = [np.concatenate([p.load.position, p.load.orientation], -1) for p in teacher.plans]
         return "teacher_load_plan", torch.as_tensor(
-            teacher.load_plan, dtype=torch.float32, device=teacher.device
+            np.stack(poses), dtype=torch.float32, device=teacher.device
         )
 
 
@@ -54,9 +56,8 @@ class TeacherTensionRecorder(RecorderTerm):
 
     def record_pre_step(self):
         teacher = teacher_of(self._env)
-        return "teacher_tension", torch.as_tensor(
-            teacher.tension, dtype=torch.float32, device=teacher.device
-        )
+        tensions = [[c.tension[0] for c in p.cables] for p in teacher.plans]
+        return "teacher_tension", torch.tensor(tensions, dtype=torch.float32, device=teacher.device)
 
 
 class RopeForceRecorder(RecorderTerm):
